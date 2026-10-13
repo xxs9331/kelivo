@@ -27,6 +27,7 @@ import 'package:provider/provider.dart';
 import 'package:dynamic_color/dynamic_color.dart';
 import 'core/providers/user_provider.dart';
 import 'core/providers/settings_provider.dart';
+import 'core/providers/sync_provider.dart';
 import 'core/providers/mcp_provider.dart';
 import 'core/providers/tts_provider.dart';
 import 'core/providers/asr_provider.dart';
@@ -150,6 +151,9 @@ void _wireWorkspaceServices(BuildContext ctx) {
 }
 
 Future<void> main() async {
+  if (const bool.fromEnvironment('KELIVO_SYNC_TEST')) {
+    SharedPreferences.setPrefix('sync_test.');
+  }
   await runZoned(
     () async {
       WidgetsFlutterBinding.ensureInitialized();
@@ -858,6 +862,19 @@ class MyApp extends StatelessWidget {
             businessRepository: databaseLease.businessRepository,
             businessPreferences: businessPreferences,
             initialConfig: ctx.read<SettingsProvider>().s3Config,
+          ),
+        ),
+        ChangeNotifierProvider(
+          lazy: false,
+          create: (ctx) => SyncProvider(
+            repository: databaseLease.chatRepository,
+            chat: ctx.read<ChatService>(),
+            directory: appDataDirectory,
+            businessPreferences: businessPreferences,
+            backupBusy: () =>
+                ChatActions.hasAnyActiveGeneration ||
+                ctx.read<BackupProvider>().busy ||
+                ctx.read<S3BackupProvider>().busy,
           ),
         ),
         ChangeNotifierProvider(

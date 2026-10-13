@@ -9,6 +9,76 @@ class AppLocalizationsEn extends AppLocalizations {
   AppLocalizationsEn([String locale = 'en']) : super(locale);
 
   @override
+  String get syncTitle => 'Multi-device sync';
+
+  @override
+  String get syncServer => 'Server URL';
+
+  @override
+  String get syncPairCode => 'Pairing code';
+
+  @override
+  String get syncPair => 'Pair this device';
+
+  @override
+  String get syncNow => 'Sync now';
+
+  @override
+  String get syncEnabled => 'Automatic sync';
+
+  @override
+  String get syncDisconnect => 'Disconnect this device';
+
+  @override
+  String get syncScan => 'Scan pairing QR code';
+
+  @override
+  String get syncShowQr => 'Pair another device';
+
+  @override
+  String get syncLocalHttp => 'Allow HTTP on a private LAN for testing';
+
+  @override
+  String get syncScope =>
+      'Sync conversations, messages and deletions. API keys, other settings and attachment files stay on the source device in this version. Use HTTPS outside your private LAN. Server storage is not end-to-end encrypted.';
+
+  @override
+  String get syncWorking => 'Syncing…';
+
+  @override
+  String get syncReady => 'Ready to sync';
+
+  @override
+  String get syncNotPaired =>
+      'Enter the server URL and a pairing code to connect.';
+
+  @override
+  String get syncLast => 'Last successful sync';
+
+  @override
+  String get syncPairExpired =>
+      'Pairing code is invalid, expired or already used. Generate a new code.';
+
+  @override
+  String get syncRePair =>
+      'Device authorization expired or was revoked. Pair this device again.';
+
+  @override
+  String get syncUnavailable =>
+      'Cannot sync. Check the server address, connection and server logs, then retry.';
+
+  @override
+  String get syncBusy => 'Waiting for generation, backup or restore to finish.';
+
+  @override
+  String get syncCursorAhead =>
+      'The server was restored to an older state. Disconnect and pair again to rebuild the sync baseline.';
+
+  @override
+  String get syncQrExpires =>
+      'This code expires in five minutes and can be used once.';
+
+  @override
   String get settingsSearchHint => 'Search settings';
 
   @override

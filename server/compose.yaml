@@ -1,0 +1,28 @@
+services:
+  sync:
+    build: .
+    restart: unless-stopped
+    volumes:
+      - sync_data:/data
+    healthcheck:
+      test: ["CMD", "/kelivo-sync", "-addr", "127.0.0.1:8787", "health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    environment:
+      SYNC_DOMAIN: ${SYNC_DOMAIN:?Set SYNC_DOMAIN to your server hostname}
+    ports: ["443:443", "80:80"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      sync:
+        condition: service_healthy
+volumes:
+  sync_data:
+  caddy_data:
+  caddy_config:

@@ -17,6 +17,7 @@ final class BusinessKeyRegistry {
   BusinessKeyRegistry._();
 
   static const localOnlyKeys = <String>{
+    'multi_device_sync_v1',
     'window_width_v1',
     'window_height_v1',
     'window_pos_x_v1',

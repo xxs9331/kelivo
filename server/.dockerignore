@@ -1,0 +1,6 @@
+data/
+kelivo-sync
+*.db
+*.db-wal
+*.db-shm
+.env

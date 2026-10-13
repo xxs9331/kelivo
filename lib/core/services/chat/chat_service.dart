@@ -425,6 +425,24 @@ class ChatService extends ChangeNotifier {
     );
   }
 
+  Future<void> refreshAfterSync() async {
+    if (!_initialized) await init();
+    final ids = _conversationsCache.keys.toList();
+    _clearPersistedMessageCache();
+    await _loadConversationsCache();
+    for (final id in ids) {
+      _bumpContextRevision(id);
+    }
+    if (_currentConversationId != null &&
+        !_conversationsCache.containsKey(_currentConversationId) &&
+        !_temporaryConversationIds.contains(_currentConversationId) &&
+        !_draftConversations.containsKey(_currentConversationId)) {
+      _currentConversationId = null;
+    }
+    _statisticsRevision++;
+    notifyListeners();
+  }
+
   Future<void> _loadConversationsCache() async {
     final conversations = await _repo.getAllConversationSummaries();
     _toolEventsCache.clear();

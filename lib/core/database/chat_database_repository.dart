@@ -28,11 +28,16 @@ import 'chat_database_observer.dart';
 import 'generation_run.dart';
 import 'generation_run_commands.dart';
 import 'schema_migrations.dart';
+import 'sync_tracking.dart';
+import '../services/sync/sync_record.dart';
+
 import '../services/api/stream/stream_chunk_handler.dart';
 import '../services/api/providers/claude/claude_thinking_recovery.dart';
 import '../services/api/providers/claude/claude_history.dart';
 import '../services/backup/restore_durability.dart';
 import '../services/backup/restore_previous_plan.dart';
+
+part 'chat_database_sync.dart';
 
 typedef ChatDatabaseSnapshotInfo = ({
   int schemaVersion,
@@ -830,6 +835,8 @@ class ChatDatabaseRepository {
       'message_prompt_rows',
       'tombstone_rows',
       'extension_entity_rows',
+      'sync_change_log_rows',
+      'sync_state_rows',
     };
     final tableRows = database.select(
       "SELECT name FROM sqlite_master WHERE type = 'table';",
@@ -860,6 +867,14 @@ class ChatDatabaseRepository {
   /// Keep it in step with the table DSL — see SchemaMigrations for the
   /// checklist that a schema bump has to follow.
   static const currentSchemaColumns = <String, List<String>>{
+    'sync_change_log_rows': [
+      'local_seq',
+      'kind',
+      'entity_id',
+      'updated_at',
+      'deleted',
+    ],
+    'sync_state_rows': ['key', 'value'],
     'conversation_rows': [
       'id',
       'title',
@@ -1428,6 +1443,7 @@ class ChatDatabaseRepository {
 
   Future<void> ensureReady() async {
     await _db.customSelect('SELECT 1').get();
+    await SyncTracking.install(_db);
   }
 
   Future<ChatDatabaseConnectionContract> validateConnectionContract() async {
@@ -6486,6 +6502,11 @@ class ChatDatabaseRepository {
   }
 
   Future<void> _clearChatRows() async {
+    await _db
+        .into(_db.syncStateRows)
+        .insertOnConflictUpdate(
+          SyncStateRowsCompanion.insert(key: 'applying', value: '1'),
+        );
     await _db.customStatement(
       "DELETE FROM extension_entity_rows WHERE kind IN ('composerDraft','composerNewEntry','composerPrivateFile','composerPublishedFile')",
     );
@@ -6498,6 +6519,8 @@ class ChatDatabaseRepository {
     await (_db.delete(
       _db.chatStorageMetaRows,
     )..where((t) => t.key.equals(ChatStorageMetaKeys.activeStreamingIds))).go();
+    await _db.delete(_db.syncChangeLogRows).go();
+    await _db.delete(_db.syncStateRows).go();
   }
 
   Future<List<Map<String, dynamic>>> getToolEvents(String messageId) async {

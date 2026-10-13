@@ -76,6 +76,21 @@ Future<Map<String, dynamic>> _sendAndCaptureRequestBody(
   return captured;
 }
 
+class _LoopbackHttpOverrides extends HttpOverrides {
+  @override
+  HttpClient createHttpClient(SecurityContext? context) =>
+      super.createHttpClient(context)
+        ..connectionFactory = (uri, proxyHost, proxyPort) {
+          final socket = Socket.connect(InternetAddress.loopbackIPv6, uri.port);
+          return Future.value(
+            ConnectionTask.fromSocket(
+              socket,
+              () async => (await socket).destroy(),
+            ),
+          );
+        };
+}
+
 Future<Map<String, dynamic>> _captureStreamingChatBody({String? host}) async {
   late Map<String, dynamic> requestBody;
   final server = await HttpServer.bind(
@@ -113,7 +128,7 @@ Future<Map<String, dynamic>> _captureStreamingChatBody({String? host}) async {
     await request.response.close();
   });
 
-  await ChatApiService.sendMessageStream(
+  Future<void> send() async => await ChatApiService.sendMessageStream(
     config: ProviderConfig(
       id: 'OpenAITest',
       enabled: true,
@@ -127,6 +142,15 @@ Future<Map<String, dynamic>> _captureStreamingChatBody({String? host}) async {
       {'role': 'user', 'content': 'hi'},
     ],
   ).toList();
+  if (host == null) {
+    await send();
+  } else {
+    // Provider hostnames select request behavior; sockets reach the local fixture without DNS.
+    await HttpOverrides.runZoned(
+      send,
+      createHttpClient: _LoopbackHttpOverrides().createHttpClient,
+    );
+  }
   return requestBody;
 }
 

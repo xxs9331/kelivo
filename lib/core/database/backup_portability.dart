@@ -119,6 +119,9 @@ final class BackupPortability {
           AND (json_type(extras_json, '\$."workspace.id"') IS NOT NULL
             OR json_type(extras_json, '\$."workspace.allowAll"') IS NOT NULL);
       ''');
+      // A restored database must build a new baseline on this device.
+      await database.delete(database.syncChangeLogRows).go();
+      await database.delete(database.syncStateRows).go();
     });
   }
 }

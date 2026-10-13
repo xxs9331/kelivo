@@ -722,6 +722,23 @@ class ExtensionEntityRows extends Table {
   Set<Column<Object>> get primaryKey => {kind, id};
 }
 
+@TableIndex(name: 'idx_sync_pending', columns: {#kind, #entityId, #localSeq})
+class SyncChangeLogRows extends Table {
+  IntColumn get localSeq => integer().autoIncrement()();
+  TextColumn get kind => text()();
+  TextColumn get entityId => text()();
+  IntColumn get updatedAt => integer()();
+  BoolColumn get deleted => boolean().withDefault(const Constant(false))();
+}
+
+/// Device-local state; never carries authentication tokens.
+class SyncStateRows extends Table {
+  TextColumn get key => text()();
+  TextColumn get value => text()();
+  @override
+  Set<Column<Object>> get primaryKey => {key};
+}
+
 @DriftDatabase(
   tables: [
     ConversationRows,
@@ -753,6 +770,8 @@ class ExtensionEntityRows extends Table {
     MessagePromptRows,
     TombstoneRows,
     ExtensionEntityRows,
+    SyncChangeLogRows,
+    SyncStateRows,
   ],
 )
 class AppDatabase extends _$AppDatabase {
@@ -766,11 +785,11 @@ class AppDatabase extends _$AppDatabase {
   // extension_entity_rows) so later features can ship without further
   // migrations. Every version outside [publishedSchemaVersions] belongs to an
   // unpublished or future format and is rejected.
-  static const currentSchemaVersion = 3;
+  static const currentSchemaVersion = 4;
 
   /// Every schema that has ever shipped. A file at any of these can be
   /// upgraded by `SchemaMigrations`; anything else is rejected outright.
-  static const publishedSchemaVersions = <int>{1, 2, 3};
+  static const publishedSchemaVersions = <int>{1, 2, 3, 4};
 
   /// Whether a live application connection may use a file as-is: either freshly
   /// created (0) or already at the current schema.
@@ -940,6 +959,11 @@ FROM probe;
         await m.createTable(schema.extensionEntityRows);
         // stepByStep does not create new indexes automatically.
         await m.create(schema.idxExtensionEntitiesKindOrder);
+      },
+      from3To4: (m, schema) async {
+        await m.createTable(schema.syncChangeLogRows);
+        await m.createTable(schema.syncStateRows);
+        await m.create(schema.idxSyncPending);
       },
     ),
     beforeOpen: (details) async {

@@ -69,6 +69,8 @@ final class BusinessPreferences {
     }
   }
 
+  bool get writesBlockedForRestore => _writesBlockedForRestore;
+
   /// Awaits every write accepted so far. Desktop exit hooks flush through this
   /// so the serialized queue reaches SQLite before the process exits.
   Future<void> flushPendingWrites() => _writeTail;

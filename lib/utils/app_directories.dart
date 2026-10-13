@@ -20,7 +20,10 @@ class AppDirectories {
       case TargetPlatform.windows:
       case TargetPlatform.macOS:
       case TargetPlatform.linux:
-        return await getApplicationSupportDirectory();
+        final root = await getApplicationSupportDirectory();
+        return const bool.fromEnvironment('KELIVO_SYNC_TEST')
+            ? Directory('${root.path}/sync-test')
+            : root;
       case TargetPlatform.android:
       case TargetPlatform.iOS:
       case TargetPlatform.fuchsia:

@@ -12078,6 +12078,571 @@ class ExtensionEntityRowsCompanion extends UpdateCompanion<ExtensionEntityRow> {
   }
 }
 
+class $SyncChangeLogRowsTable extends SyncChangeLogRows
+    with TableInfo<$SyncChangeLogRowsTable, SyncChangeLogRow> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $SyncChangeLogRowsTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _localSeqMeta = const VerificationMeta(
+    'localSeq',
+  );
+  @override
+  late final GeneratedColumn<int> localSeq = GeneratedColumn<int>(
+    'local_seq',
+    aliasedName,
+    false,
+    hasAutoIncrement: true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'PRIMARY KEY AUTOINCREMENT',
+    ),
+  );
+  static const VerificationMeta _kindMeta = const VerificationMeta('kind');
+  @override
+  late final GeneratedColumn<String> kind = GeneratedColumn<String>(
+    'kind',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _entityIdMeta = const VerificationMeta(
+    'entityId',
+  );
+  @override
+  late final GeneratedColumn<String> entityId = GeneratedColumn<String>(
+    'entity_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _updatedAtMeta = const VerificationMeta(
+    'updatedAt',
+  );
+  @override
+  late final GeneratedColumn<int> updatedAt = GeneratedColumn<int>(
+    'updated_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _deletedMeta = const VerificationMeta(
+    'deleted',
+  );
+  @override
+  late final GeneratedColumn<bool> deleted = GeneratedColumn<bool>(
+    'deleted',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("deleted" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    localSeq,
+    kind,
+    entityId,
+    updatedAt,
+    deleted,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'sync_change_log_rows';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<SyncChangeLogRow> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('local_seq')) {
+      context.handle(
+        _localSeqMeta,
+        localSeq.isAcceptableOrUnknown(data['local_seq']!, _localSeqMeta),
+      );
+    }
+    if (data.containsKey('kind')) {
+      context.handle(
+        _kindMeta,
+        kind.isAcceptableOrUnknown(data['kind']!, _kindMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_kindMeta);
+    }
+    if (data.containsKey('entity_id')) {
+      context.handle(
+        _entityIdMeta,
+        entityId.isAcceptableOrUnknown(data['entity_id']!, _entityIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_entityIdMeta);
+    }
+    if (data.containsKey('updated_at')) {
+      context.handle(
+        _updatedAtMeta,
+        updatedAt.isAcceptableOrUnknown(data['updated_at']!, _updatedAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_updatedAtMeta);
+    }
+    if (data.containsKey('deleted')) {
+      context.handle(
+        _deletedMeta,
+        deleted.isAcceptableOrUnknown(data['deleted']!, _deletedMeta),
+      );
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {localSeq};
+  @override
+  SyncChangeLogRow map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return SyncChangeLogRow(
+      localSeq: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}local_seq'],
+      )!,
+      kind: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}kind'],
+      )!,
+      entityId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}entity_id'],
+      )!,
+      updatedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}updated_at'],
+      )!,
+      deleted: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}deleted'],
+      )!,
+    );
+  }
+
+  @override
+  $SyncChangeLogRowsTable createAlias(String alias) {
+    return $SyncChangeLogRowsTable(attachedDatabase, alias);
+  }
+}
+
+class SyncChangeLogRow extends DataClass
+    implements Insertable<SyncChangeLogRow> {
+  final int localSeq;
+  final String kind;
+  final String entityId;
+  final int updatedAt;
+  final bool deleted;
+  const SyncChangeLogRow({
+    required this.localSeq,
+    required this.kind,
+    required this.entityId,
+    required this.updatedAt,
+    required this.deleted,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['local_seq'] = Variable<int>(localSeq);
+    map['kind'] = Variable<String>(kind);
+    map['entity_id'] = Variable<String>(entityId);
+    map['updated_at'] = Variable<int>(updatedAt);
+    map['deleted'] = Variable<bool>(deleted);
+    return map;
+  }
+
+  SyncChangeLogRowsCompanion toCompanion(bool nullToAbsent) {
+    return SyncChangeLogRowsCompanion(
+      localSeq: Value(localSeq),
+      kind: Value(kind),
+      entityId: Value(entityId),
+      updatedAt: Value(updatedAt),
+      deleted: Value(deleted),
+    );
+  }
+
+  factory SyncChangeLogRow.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return SyncChangeLogRow(
+      localSeq: serializer.fromJson<int>(json['localSeq']),
+      kind: serializer.fromJson<String>(json['kind']),
+      entityId: serializer.fromJson<String>(json['entityId']),
+      updatedAt: serializer.fromJson<int>(json['updatedAt']),
+      deleted: serializer.fromJson<bool>(json['deleted']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'localSeq': serializer.toJson<int>(localSeq),
+      'kind': serializer.toJson<String>(kind),
+      'entityId': serializer.toJson<String>(entityId),
+      'updatedAt': serializer.toJson<int>(updatedAt),
+      'deleted': serializer.toJson<bool>(deleted),
+    };
+  }
+
+  SyncChangeLogRow copyWith({
+    int? localSeq,
+    String? kind,
+    String? entityId,
+    int? updatedAt,
+    bool? deleted,
+  }) => SyncChangeLogRow(
+    localSeq: localSeq ?? this.localSeq,
+    kind: kind ?? this.kind,
+    entityId: entityId ?? this.entityId,
+    updatedAt: updatedAt ?? this.updatedAt,
+    deleted: deleted ?? this.deleted,
+  );
+  SyncChangeLogRow copyWithCompanion(SyncChangeLogRowsCompanion data) {
+    return SyncChangeLogRow(
+      localSeq: data.localSeq.present ? data.localSeq.value : this.localSeq,
+      kind: data.kind.present ? data.kind.value : this.kind,
+      entityId: data.entityId.present ? data.entityId.value : this.entityId,
+      updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
+      deleted: data.deleted.present ? data.deleted.value : this.deleted,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('SyncChangeLogRow(')
+          ..write('localSeq: $localSeq, ')
+          ..write('kind: $kind, ')
+          ..write('entityId: $entityId, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('deleted: $deleted')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(localSeq, kind, entityId, updatedAt, deleted);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is SyncChangeLogRow &&
+          other.localSeq == this.localSeq &&
+          other.kind == this.kind &&
+          other.entityId == this.entityId &&
+          other.updatedAt == this.updatedAt &&
+          other.deleted == this.deleted);
+}
+
+class SyncChangeLogRowsCompanion extends UpdateCompanion<SyncChangeLogRow> {
+  final Value<int> localSeq;
+  final Value<String> kind;
+  final Value<String> entityId;
+  final Value<int> updatedAt;
+  final Value<bool> deleted;
+  const SyncChangeLogRowsCompanion({
+    this.localSeq = const Value.absent(),
+    this.kind = const Value.absent(),
+    this.entityId = const Value.absent(),
+    this.updatedAt = const Value.absent(),
+    this.deleted = const Value.absent(),
+  });
+  SyncChangeLogRowsCompanion.insert({
+    this.localSeq = const Value.absent(),
+    required String kind,
+    required String entityId,
+    required int updatedAt,
+    this.deleted = const Value.absent(),
+  }) : kind = Value(kind),
+       entityId = Value(entityId),
+       updatedAt = Value(updatedAt);
+  static Insertable<SyncChangeLogRow> custom({
+    Expression<int>? localSeq,
+    Expression<String>? kind,
+    Expression<String>? entityId,
+    Expression<int>? updatedAt,
+    Expression<bool>? deleted,
+  }) {
+    return RawValuesInsertable({
+      if (localSeq != null) 'local_seq': localSeq,
+      if (kind != null) 'kind': kind,
+      if (entityId != null) 'entity_id': entityId,
+      if (updatedAt != null) 'updated_at': updatedAt,
+      if (deleted != null) 'deleted': deleted,
+    });
+  }
+
+  SyncChangeLogRowsCompanion copyWith({
+    Value<int>? localSeq,
+    Value<String>? kind,
+    Value<String>? entityId,
+    Value<int>? updatedAt,
+    Value<bool>? deleted,
+  }) {
+    return SyncChangeLogRowsCompanion(
+      localSeq: localSeq ?? this.localSeq,
+      kind: kind ?? this.kind,
+      entityId: entityId ?? this.entityId,
+      updatedAt: updatedAt ?? this.updatedAt,
+      deleted: deleted ?? this.deleted,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (localSeq.present) {
+      map['local_seq'] = Variable<int>(localSeq.value);
+    }
+    if (kind.present) {
+      map['kind'] = Variable<String>(kind.value);
+    }
+    if (entityId.present) {
+      map['entity_id'] = Variable<String>(entityId.value);
+    }
+    if (updatedAt.present) {
+      map['updated_at'] = Variable<int>(updatedAt.value);
+    }
+    if (deleted.present) {
+      map['deleted'] = Variable<bool>(deleted.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('SyncChangeLogRowsCompanion(')
+          ..write('localSeq: $localSeq, ')
+          ..write('kind: $kind, ')
+          ..write('entityId: $entityId, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('deleted: $deleted')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class $SyncStateRowsTable extends SyncStateRows
+    with TableInfo<$SyncStateRowsTable, SyncStateRow> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $SyncStateRowsTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _keyMeta = const VerificationMeta('key');
+  @override
+  late final GeneratedColumn<String> key = GeneratedColumn<String>(
+    'key',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _valueMeta = const VerificationMeta('value');
+  @override
+  late final GeneratedColumn<String> value = GeneratedColumn<String>(
+    'value',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [key, value];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'sync_state_rows';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<SyncStateRow> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('key')) {
+      context.handle(
+        _keyMeta,
+        key.isAcceptableOrUnknown(data['key']!, _keyMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_keyMeta);
+    }
+    if (data.containsKey('value')) {
+      context.handle(
+        _valueMeta,
+        value.isAcceptableOrUnknown(data['value']!, _valueMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_valueMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {key};
+  @override
+  SyncStateRow map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return SyncStateRow(
+      key: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}key'],
+      )!,
+      value: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}value'],
+      )!,
+    );
+  }
+
+  @override
+  $SyncStateRowsTable createAlias(String alias) {
+    return $SyncStateRowsTable(attachedDatabase, alias);
+  }
+}
+
+class SyncStateRow extends DataClass implements Insertable<SyncStateRow> {
+  final String key;
+  final String value;
+  const SyncStateRow({required this.key, required this.value});
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['key'] = Variable<String>(key);
+    map['value'] = Variable<String>(value);
+    return map;
+  }
+
+  SyncStateRowsCompanion toCompanion(bool nullToAbsent) {
+    return SyncStateRowsCompanion(key: Value(key), value: Value(value));
+  }
+
+  factory SyncStateRow.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return SyncStateRow(
+      key: serializer.fromJson<String>(json['key']),
+      value: serializer.fromJson<String>(json['value']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'key': serializer.toJson<String>(key),
+      'value': serializer.toJson<String>(value),
+    };
+  }
+
+  SyncStateRow copyWith({String? key, String? value}) =>
+      SyncStateRow(key: key ?? this.key, value: value ?? this.value);
+  SyncStateRow copyWithCompanion(SyncStateRowsCompanion data) {
+    return SyncStateRow(
+      key: data.key.present ? data.key.value : this.key,
+      value: data.value.present ? data.value.value : this.value,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('SyncStateRow(')
+          ..write('key: $key, ')
+          ..write('value: $value')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(key, value);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is SyncStateRow &&
+          other.key == this.key &&
+          other.value == this.value);
+}
+
+class SyncStateRowsCompanion extends UpdateCompanion<SyncStateRow> {
+  final Value<String> key;
+  final Value<String> value;
+  final Value<int> rowid;
+  const SyncStateRowsCompanion({
+    this.key = const Value.absent(),
+    this.value = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  SyncStateRowsCompanion.insert({
+    required String key,
+    required String value,
+    this.rowid = const Value.absent(),
+  }) : key = Value(key),
+       value = Value(value);
+  static Insertable<SyncStateRow> custom({
+    Expression<String>? key,
+    Expression<String>? value,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (key != null) 'key': key,
+      if (value != null) 'value': value,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  SyncStateRowsCompanion copyWith({
+    Value<String>? key,
+    Value<String>? value,
+    Value<int>? rowid,
+  }) {
+    return SyncStateRowsCompanion(
+      key: key ?? this.key,
+      value: value ?? this.value,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (key.present) {
+      map['key'] = Variable<String>(key.value);
+    }
+    if (value.present) {
+      map['value'] = Variable<String>(value.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('SyncStateRowsCompanion(')
+          ..write('key: $key, ')
+          ..write('value: $value, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$AppDatabase extends GeneratedDatabase {
   _$AppDatabase(QueryExecutor e) : super(e);
   $AppDatabaseManager get managers => $AppDatabaseManager(this);
@@ -12134,6 +12699,9 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   late final $TombstoneRowsTable tombstoneRows = $TombstoneRowsTable(this);
   late final $ExtensionEntityRowsTable extensionEntityRows =
       $ExtensionEntityRowsTable(this);
+  late final $SyncChangeLogRowsTable syncChangeLogRows =
+      $SyncChangeLogRowsTable(this);
+  late final $SyncStateRowsTable syncStateRows = $SyncStateRowsTable(this);
   late final Index idxConversationsUpdatedAt = Index(
     'idx_conversations_updated_at',
     'CREATE INDEX idx_conversations_updated_at ON conversation_rows (updated_at DESC, id ASC)',
@@ -12202,6 +12770,10 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     'idx_extension_entities_kind_order',
     'CREATE INDEX idx_extension_entities_kind_order ON extension_entity_rows (kind, sort_order)',
   );
+  late final Index idxSyncPending = Index(
+    'idx_sync_pending',
+    'CREATE INDEX idx_sync_pending ON sync_change_log_rows (kind, entity_id, local_seq)',
+  );
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
@@ -12236,6 +12808,8 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     messagePromptRows,
     tombstoneRows,
     extensionEntityRows,
+    syncChangeLogRows,
+    syncStateRows,
     idxConversationsUpdatedAt,
     idxConversationsAssistant,
     idxMessagesConversationOrder,
@@ -12253,6 +12827,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     idxMemoryEntriesDedupe,
     idxMessagePromptsConversationSnapshot,
     idxExtensionEntitiesKindOrder,
+    idxSyncPending,
   ];
   @override
   StreamQueryUpdateRules get streamUpdateRules => const StreamQueryUpdateRules([
@@ -12956,7 +13531,7 @@ class $$ConversationRowsTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable(table),
+                  e.readTable<$ConversationRowsTable, ConversationRow>(table),
                   $$ConversationRowsTableReferences(db, table, e),
                 ),
               )
@@ -13828,7 +14403,7 @@ class $$MessageRowsTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable(table),
+                  e.readTable<$MessageRowsTable, MessageRow>(table),
                   $$MessageRowsTableReferences(db, table, e),
                 ),
               )
@@ -14189,7 +14764,10 @@ class $$ConversationMcpServerRowsTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable(table),
+                  e.readTable<
+                    $ConversationMcpServerRowsTable,
+                    ConversationMcpServerRow
+                  >(table),
                   $$ConversationMcpServerRowsTableReferences(db, table, e),
                 ),
               )
@@ -14386,7 +14964,18 @@ class $$ChatStorageMetaRowsTableTableManager
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
-              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .map(
+                (e) => (
+                  e.readTable<$ChatStorageMetaRowsTable, ChatStorageMetaRow>(
+                    table,
+                  ),
+                  BaseReferences<
+                    _$AppDatabase,
+                    $ChatStorageMetaRowsTable,
+                    ChatStorageMetaRow
+                  >(db, table, e),
+                ),
+              )
               .toList(),
           prefetchHooksCallback: null,
         ),
@@ -14653,7 +15242,16 @@ class $$MessagePartRowsTableTableManager
                 updatedAt: updatedAt,
               ),
           withReferenceMapper: (p0) => p0
-              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .map(
+                (e) => (
+                  e.readTable<$MessagePartRowsTable, MessagePartRow>(table),
+                  BaseReferences<
+                    _$AppDatabase,
+                    $MessagePartRowsTable,
+                    MessagePartRow
+                  >(db, table, e),
+                ),
+              )
               .toList(),
           prefetchHooksCallback: null,
         ),
@@ -14890,7 +15488,18 @@ class $$ProviderArtifactRowsTableTableManager
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
-              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .map(
+                (e) => (
+                  e.readTable<$ProviderArtifactRowsTable, ProviderArtifactRow>(
+                    table,
+                  ),
+                  BaseReferences<
+                    _$AppDatabase,
+                    $ProviderArtifactRowsTable,
+                    ProviderArtifactRow
+                  >(db, table, e),
+                ),
+              )
               .toList(),
           prefetchHooksCallback: null,
         ),
@@ -15345,7 +15954,7 @@ class $$AssetRowsTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable(table),
+                  e.readTable<$AssetRowsTable, AssetRow>(table),
                   $$AssetRowsTableReferences(db, table, e),
                 ),
               )
@@ -15741,7 +16350,7 @@ class $$MessageAssetRowsTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable(table),
+                  e.readTable<$MessageAssetRowsTable, MessageAssetRow>(table),
                   $$MessageAssetRowsTableReferences(db, table, e),
                 ),
               )
@@ -16059,7 +16668,7 @@ class $$AssetGcRowsTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable(table),
+                  e.readTable<$AssetGcRowsTable, AssetGcRow>(table),
                   $$AssetGcRowsTableReferences(db, table, e),
                 ),
               )
@@ -16278,7 +16887,16 @@ class $$GcAuditRowsTableTableManager
                 completedAt: completedAt,
               ),
           withReferenceMapper: (p0) => p0
-              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .map(
+                (e) => (
+                  e.readTable<$GcAuditRowsTable, GcAuditRow>(table),
+                  BaseReferences<_$AppDatabase, $GcAuditRowsTable, GcAuditRow>(
+                    db,
+                    table,
+                    e,
+                  ),
+                ),
+              )
               .toList(),
           prefetchHooksCallback: null,
         ),
@@ -16499,7 +17117,10 @@ class $$AssetReferenceDirtyRowsTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable(table),
+                  e.readTable<
+                    $AssetReferenceDirtyRowsTable,
+                    AssetReferenceDirtyRow
+                  >(table),
                   $$AssetReferenceDirtyRowsTableReferences(db, table, e),
                 ),
               )
@@ -16941,7 +17562,7 @@ class $$GenerationRunRowsTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable(table),
+                  e.readTable<$GenerationRunRowsTable, GenerationRunRow>(table),
                   $$GenerationRunRowsTableReferences(db, table, e),
                 ),
               )
@@ -17165,7 +17786,16 @@ class $$AssistantRowsTableTableManager
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
-              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .map(
+                (e) => (
+                  e.readTable<$AssistantRowsTable, AssistantRow>(table),
+                  BaseReferences<
+                    _$AppDatabase,
+                    $AssistantRowsTable,
+                    AssistantRow
+                  >(db, table, e),
+                ),
+              )
               .toList(),
           prefetchHooksCallback: null,
         ),
@@ -17349,7 +17979,16 @@ class $$ProviderRowsTableTableManager
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
-              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .map(
+                (e) => (
+                  e.readTable<$ProviderRowsTable, ProviderRow>(table),
+                  BaseReferences<
+                    _$AppDatabase,
+                    $ProviderRowsTable,
+                    ProviderRow
+                  >(db, table, e),
+                ),
+              )
               .toList(),
           prefetchHooksCallback: null,
         ),
@@ -17540,7 +18179,16 @@ class $$ProviderGroupRowsTableTableManager
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
-              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .map(
+                (e) => (
+                  e.readTable<$ProviderGroupRowsTable, ProviderGroupRow>(table),
+                  BaseReferences<
+                    _$AppDatabase,
+                    $ProviderGroupRowsTable,
+                    ProviderGroupRow
+                  >(db, table, e),
+                ),
+              )
               .toList(),
           prefetchHooksCallback: null,
         ),
@@ -17726,7 +18374,16 @@ class $$McpServerRowsTableTableManager
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
-              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .map(
+                (e) => (
+                  e.readTable<$McpServerRowsTable, McpServerRow>(table),
+                  BaseReferences<
+                    _$AppDatabase,
+                    $McpServerRowsTable,
+                    McpServerRow
+                  >(db, table, e),
+                ),
+              )
               .toList(),
           prefetchHooksCallback: null,
         ),
@@ -17908,7 +18565,16 @@ class $$WorldBookRowsTableTableManager
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
-              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .map(
+                (e) => (
+                  e.readTable<$WorldBookRowsTable, WorldBookRow>(table),
+                  BaseReferences<
+                    _$AppDatabase,
+                    $WorldBookRowsTable,
+                    WorldBookRow
+                  >(db, table, e),
+                ),
+              )
               .toList(),
           prefetchHooksCallback: null,
         ),
@@ -18123,7 +18789,18 @@ class $$AssistantMemoryRowsTableTableManager
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
-              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .map(
+                (e) => (
+                  e.readTable<$AssistantMemoryRowsTable, AssistantMemoryRow>(
+                    table,
+                  ),
+                  BaseReferences<
+                    _$AppDatabase,
+                    $AssistantMemoryRowsTable,
+                    AssistantMemoryRow
+                  >(db, table, e),
+                ),
+              )
               .toList(),
           prefetchHooksCallback: null,
         ),
@@ -18315,7 +18992,16 @@ class $$QuickPhraseRowsTableTableManager
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
-              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .map(
+                (e) => (
+                  e.readTable<$QuickPhraseRowsTable, QuickPhraseRow>(table),
+                  BaseReferences<
+                    _$AppDatabase,
+                    $QuickPhraseRowsTable,
+                    QuickPhraseRow
+                  >(db, table, e),
+                ),
+              )
               .toList(),
           prefetchHooksCallback: null,
         ),
@@ -18506,7 +19192,16 @@ class $$SearchServiceRowsTableTableManager
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
-              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .map(
+                (e) => (
+                  e.readTable<$SearchServiceRowsTable, SearchServiceRow>(table),
+                  BaseReferences<
+                    _$AppDatabase,
+                    $SearchServiceRowsTable,
+                    SearchServiceRow
+                  >(db, table, e),
+                ),
+              )
               .toList(),
           prefetchHooksCallback: null,
         ),
@@ -18694,7 +19389,16 @@ class $$TtsServiceRowsTableTableManager
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
-              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .map(
+                (e) => (
+                  e.readTable<$TtsServiceRowsTable, TtsServiceRow>(table),
+                  BaseReferences<
+                    _$AppDatabase,
+                    $TtsServiceRowsTable,
+                    TtsServiceRow
+                  >(db, table, e),
+                ),
+              )
               .toList(),
           prefetchHooksCallback: null,
         ),
@@ -18891,7 +19595,19 @@ class $$InstructionInjectionRowsTableTableManager
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
-              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .map(
+                (e) => (
+                  e.readTable<
+                    $InstructionInjectionRowsTable,
+                    InstructionInjectionRow
+                  >(table),
+                  BaseReferences<
+                    _$AppDatabase,
+                    $InstructionInjectionRowsTable,
+                    InstructionInjectionRow
+                  >(db, table, e),
+                ),
+              )
               .toList(),
           prefetchHooksCallback: null,
         ),
@@ -19083,7 +19799,16 @@ class $$AssistantTagRowsTableTableManager
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
-              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .map(
+                (e) => (
+                  e.readTable<$AssistantTagRowsTable, AssistantTagRow>(table),
+                  BaseReferences<
+                    _$AppDatabase,
+                    $AssistantTagRowsTable,
+                    AssistantTagRow
+                  >(db, table, e),
+                ),
+              )
               .toList(),
           prefetchHooksCallback: null,
         ),
@@ -19248,7 +19973,16 @@ class $$PreferenceRowsTableTableManager
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
-              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .map(
+                (e) => (
+                  e.readTable<$PreferenceRowsTable, PreferenceRow>(table),
+                  BaseReferences<
+                    _$AppDatabase,
+                    $PreferenceRowsTable,
+                    PreferenceRow
+                  >(db, table, e),
+                ),
+              )
               .toList(),
           prefetchHooksCallback: null,
         ),
@@ -19600,7 +20334,16 @@ class $$MemoryEntryRowsTableTableManager
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
-              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .map(
+                (e) => (
+                  e.readTable<$MemoryEntryRowsTable, MemoryEntryRow>(table),
+                  BaseReferences<
+                    _$AppDatabase,
+                    $MemoryEntryRowsTable,
+                    MemoryEntryRow
+                  >(db, table, e),
+                ),
+              )
               .toList(),
           prefetchHooksCallback: null,
         ),
@@ -19794,7 +20537,18 @@ class $$UserProfileFieldRowsTableTableManager
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
-              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .map(
+                (e) => (
+                  e.readTable<$UserProfileFieldRowsTable, UserProfileFieldRow>(
+                    table,
+                  ),
+                  BaseReferences<
+                    _$AppDatabase,
+                    $UserProfileFieldRowsTable,
+                    UserProfileFieldRow
+                  >(db, table, e),
+                ),
+              )
               .toList(),
           prefetchHooksCallback: null,
         ),
@@ -20014,7 +20768,16 @@ class $$MessagePromptRowsTableTableManager
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
-              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .map(
+                (e) => (
+                  e.readTable<$MessagePromptRowsTable, MessagePromptRow>(table),
+                  BaseReferences<
+                    _$AppDatabase,
+                    $MessagePromptRowsTable,
+                    MessagePromptRow
+                  >(db, table, e),
+                ),
+              )
               .toList(),
           prefetchHooksCallback: null,
         ),
@@ -20200,7 +20963,16 @@ class $$TombstoneRowsTableTableManager
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
-              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .map(
+                (e) => (
+                  e.readTable<$TombstoneRowsTable, TombstoneRow>(table),
+                  BaseReferences<
+                    _$AppDatabase,
+                    $TombstoneRowsTable,
+                    TombstoneRow
+                  >(db, table, e),
+                ),
+              )
               .toList(),
           prefetchHooksCallback: null,
         ),
@@ -20432,7 +21204,18 @@ class $$ExtensionEntityRowsTableTableManager
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
-              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .map(
+                (e) => (
+                  e.readTable<$ExtensionEntityRowsTable, ExtensionEntityRow>(
+                    table,
+                  ),
+                  BaseReferences<
+                    _$AppDatabase,
+                    $ExtensionEntityRowsTable,
+                    ExtensionEntityRow
+                  >(db, table, e),
+                ),
+              )
               .toList(),
           prefetchHooksCallback: null,
         ),
@@ -20458,6 +21241,371 @@ typedef $$ExtensionEntityRowsTableProcessedTableManager =
         >,
       ),
       ExtensionEntityRow,
+      PrefetchHooks Function()
+    >;
+typedef $$SyncChangeLogRowsTableCreateCompanionBuilder =
+    SyncChangeLogRowsCompanion Function({
+      Value<int> localSeq,
+      required String kind,
+      required String entityId,
+      required int updatedAt,
+      Value<bool> deleted,
+    });
+typedef $$SyncChangeLogRowsTableUpdateCompanionBuilder =
+    SyncChangeLogRowsCompanion Function({
+      Value<int> localSeq,
+      Value<String> kind,
+      Value<String> entityId,
+      Value<int> updatedAt,
+      Value<bool> deleted,
+    });
+
+class $$SyncChangeLogRowsTableFilterComposer
+    extends Composer<_$AppDatabase, $SyncChangeLogRowsTable> {
+  $$SyncChangeLogRowsTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<int> get localSeq => $composableBuilder(
+    column: $table.localSeq,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get kind => $composableBuilder(
+    column: $table.kind,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get entityId => $composableBuilder(
+    column: $table.entityId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get deleted => $composableBuilder(
+    column: $table.deleted,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$SyncChangeLogRowsTableOrderingComposer
+    extends Composer<_$AppDatabase, $SyncChangeLogRowsTable> {
+  $$SyncChangeLogRowsTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<int> get localSeq => $composableBuilder(
+    column: $table.localSeq,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get kind => $composableBuilder(
+    column: $table.kind,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get entityId => $composableBuilder(
+    column: $table.entityId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<bool> get deleted => $composableBuilder(
+    column: $table.deleted,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$SyncChangeLogRowsTableAnnotationComposer
+    extends Composer<_$AppDatabase, $SyncChangeLogRowsTable> {
+  $$SyncChangeLogRowsTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<int> get localSeq =>
+      $composableBuilder(column: $table.localSeq, builder: (column) => column);
+
+  GeneratedColumn<String> get kind =>
+      $composableBuilder(column: $table.kind, builder: (column) => column);
+
+  GeneratedColumn<String> get entityId =>
+      $composableBuilder(column: $table.entityId, builder: (column) => column);
+
+  GeneratedColumn<int> get updatedAt =>
+      $composableBuilder(column: $table.updatedAt, builder: (column) => column);
+
+  GeneratedColumn<bool> get deleted =>
+      $composableBuilder(column: $table.deleted, builder: (column) => column);
+}
+
+class $$SyncChangeLogRowsTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $SyncChangeLogRowsTable,
+          SyncChangeLogRow,
+          $$SyncChangeLogRowsTableFilterComposer,
+          $$SyncChangeLogRowsTableOrderingComposer,
+          $$SyncChangeLogRowsTableAnnotationComposer,
+          $$SyncChangeLogRowsTableCreateCompanionBuilder,
+          $$SyncChangeLogRowsTableUpdateCompanionBuilder,
+          (
+            SyncChangeLogRow,
+            BaseReferences<
+              _$AppDatabase,
+              $SyncChangeLogRowsTable,
+              SyncChangeLogRow
+            >,
+          ),
+          SyncChangeLogRow,
+          PrefetchHooks Function()
+        > {
+  $$SyncChangeLogRowsTableTableManager(
+    _$AppDatabase db,
+    $SyncChangeLogRowsTable table,
+  ) : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$SyncChangeLogRowsTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$SyncChangeLogRowsTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$SyncChangeLogRowsTableAnnotationComposer(
+                $db: db,
+                $table: table,
+              ),
+          updateCompanionCallback:
+              ({
+                Value<int> localSeq = const Value.absent(),
+                Value<String> kind = const Value.absent(),
+                Value<String> entityId = const Value.absent(),
+                Value<int> updatedAt = const Value.absent(),
+                Value<bool> deleted = const Value.absent(),
+              }) => SyncChangeLogRowsCompanion(
+                localSeq: localSeq,
+                kind: kind,
+                entityId: entityId,
+                updatedAt: updatedAt,
+                deleted: deleted,
+              ),
+          createCompanionCallback:
+              ({
+                Value<int> localSeq = const Value.absent(),
+                required String kind,
+                required String entityId,
+                required int updatedAt,
+                Value<bool> deleted = const Value.absent(),
+              }) => SyncChangeLogRowsCompanion.insert(
+                localSeq: localSeq,
+                kind: kind,
+                entityId: entityId,
+                updatedAt: updatedAt,
+                deleted: deleted,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map(
+                (e) => (
+                  e.readTable<$SyncChangeLogRowsTable, SyncChangeLogRow>(table),
+                  BaseReferences<
+                    _$AppDatabase,
+                    $SyncChangeLogRowsTable,
+                    SyncChangeLogRow
+                  >(db, table, e),
+                ),
+              )
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$SyncChangeLogRowsTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $SyncChangeLogRowsTable,
+      SyncChangeLogRow,
+      $$SyncChangeLogRowsTableFilterComposer,
+      $$SyncChangeLogRowsTableOrderingComposer,
+      $$SyncChangeLogRowsTableAnnotationComposer,
+      $$SyncChangeLogRowsTableCreateCompanionBuilder,
+      $$SyncChangeLogRowsTableUpdateCompanionBuilder,
+      (
+        SyncChangeLogRow,
+        BaseReferences<
+          _$AppDatabase,
+          $SyncChangeLogRowsTable,
+          SyncChangeLogRow
+        >,
+      ),
+      SyncChangeLogRow,
+      PrefetchHooks Function()
+    >;
+typedef $$SyncStateRowsTableCreateCompanionBuilder =
+    SyncStateRowsCompanion Function({
+      required String key,
+      required String value,
+      Value<int> rowid,
+    });
+typedef $$SyncStateRowsTableUpdateCompanionBuilder =
+    SyncStateRowsCompanion Function({
+      Value<String> key,
+      Value<String> value,
+      Value<int> rowid,
+    });
+
+class $$SyncStateRowsTableFilterComposer
+    extends Composer<_$AppDatabase, $SyncStateRowsTable> {
+  $$SyncStateRowsTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get key => $composableBuilder(
+    column: $table.key,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get value => $composableBuilder(
+    column: $table.value,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$SyncStateRowsTableOrderingComposer
+    extends Composer<_$AppDatabase, $SyncStateRowsTable> {
+  $$SyncStateRowsTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get key => $composableBuilder(
+    column: $table.key,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get value => $composableBuilder(
+    column: $table.value,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$SyncStateRowsTableAnnotationComposer
+    extends Composer<_$AppDatabase, $SyncStateRowsTable> {
+  $$SyncStateRowsTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get key =>
+      $composableBuilder(column: $table.key, builder: (column) => column);
+
+  GeneratedColumn<String> get value =>
+      $composableBuilder(column: $table.value, builder: (column) => column);
+}
+
+class $$SyncStateRowsTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $SyncStateRowsTable,
+          SyncStateRow,
+          $$SyncStateRowsTableFilterComposer,
+          $$SyncStateRowsTableOrderingComposer,
+          $$SyncStateRowsTableAnnotationComposer,
+          $$SyncStateRowsTableCreateCompanionBuilder,
+          $$SyncStateRowsTableUpdateCompanionBuilder,
+          (
+            SyncStateRow,
+            BaseReferences<_$AppDatabase, $SyncStateRowsTable, SyncStateRow>,
+          ),
+          SyncStateRow,
+          PrefetchHooks Function()
+        > {
+  $$SyncStateRowsTableTableManager(_$AppDatabase db, $SyncStateRowsTable table)
+    : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$SyncStateRowsTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$SyncStateRowsTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$SyncStateRowsTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<String> key = const Value.absent(),
+                Value<String> value = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) =>
+                  SyncStateRowsCompanion(key: key, value: value, rowid: rowid),
+          createCompanionCallback:
+              ({
+                required String key,
+                required String value,
+                Value<int> rowid = const Value.absent(),
+              }) => SyncStateRowsCompanion.insert(
+                key: key,
+                value: value,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map(
+                (e) => (
+                  e.readTable<$SyncStateRowsTable, SyncStateRow>(table),
+                  BaseReferences<
+                    _$AppDatabase,
+                    $SyncStateRowsTable,
+                    SyncStateRow
+                  >(db, table, e),
+                ),
+              )
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$SyncStateRowsTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $SyncStateRowsTable,
+      SyncStateRow,
+      $$SyncStateRowsTableFilterComposer,
+      $$SyncStateRowsTableOrderingComposer,
+      $$SyncStateRowsTableAnnotationComposer,
+      $$SyncStateRowsTableCreateCompanionBuilder,
+      $$SyncStateRowsTableUpdateCompanionBuilder,
+      (
+        SyncStateRow,
+        BaseReferences<_$AppDatabase, $SyncStateRowsTable, SyncStateRow>,
+      ),
+      SyncStateRow,
       PrefetchHooks Function()
     >;
 
@@ -20531,4 +21679,8 @@ class $AppDatabaseManager {
       $$TombstoneRowsTableTableManager(_db, _db.tombstoneRows);
   $$ExtensionEntityRowsTableTableManager get extensionEntityRows =>
       $$ExtensionEntityRowsTableTableManager(_db, _db.extensionEntityRows);
+  $$SyncChangeLogRowsTableTableManager get syncChangeLogRows =>
+      $$SyncChangeLogRowsTableTableManager(_db, _db.syncChangeLogRows);
+  $$SyncStateRowsTableTableManager get syncStateRows =>
+      $$SyncStateRowsTableTableManager(_db, _db.syncStateRows);
 }

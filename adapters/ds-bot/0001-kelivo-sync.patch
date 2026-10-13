@@ -1,0 +1,2542 @@
+From 49c01877912d7fefb14028af0777af544534b139 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?=E5=88=98=E5=8D=81=E4=BA=94?= <shiwenlongyes@163.com>
+Date: Tue, 13 Oct 2026 15:31:07 +0800
+Subject: [PATCH] Add Kelivo chat history and model context sync
+
+Pair DS Bot with the Kelivo sync server and import both user and assistant history through public Session APIs without waking agents. Persist receipts and replay markers so offline retries and restarts do not duplicate messages.
+
+Validate with 437 plugin tests, 36 existing smoke steps, and actual DSH and Kelivo model-request roundtrips using a keyless mock bench. Replace the roster greeting test's fixed delay with an observable delivery condition.
+---
+ README.md                        |   4 +
+ README.zh.md                     |   7 +
+ ds-bot/README.md                 |  44 ++
+ ds-bot/client.js                 | 817 +++++++++++++++++--------------
+ ds-bot/dev/bench.sh              |   9 +-
+ ds-bot/dev/kelivo-sync-smoke.mjs | 115 +++++
+ ds-bot/index.js                  |   3 +-
+ ds-bot/src/client/i18n.js        |  15 +
+ ds-bot/src/client/kelivo-sync.js |  54 ++
+ ds-bot/src/client/settings.js    |   6 +-
+ ds-bot/src/host/channel.js       |  12 +
+ ds-bot/src/host/kelivo-sync.js   | 371 ++++++++++++++
+ ds-bot/test/install.test.js      |   2 +
+ ds-bot/test/kelivo-sync.test.js  | 129 +++++
+ ds-bot/test/roster.test.js       |   2 +-
+ 15 files changed, 1229 insertions(+), 361 deletions(-)
+ create mode 100644 ds-bot/dev/kelivo-sync-smoke.mjs
+ create mode 100644 ds-bot/src/client/kelivo-sync.js
+ create mode 100644 ds-bot/src/host/kelivo-sync.js
+ create mode 100644 ds-bot/test/kelivo-sync.test.js
+
+diff --git a/README.md b/README.md
+index dab1da4..b46f61b 100644
+--- a/README.md
++++ b/README.md
+@@ -7,6 +7,10 @@
+ 
+ # DeepSeek Bot
+ 
++This test checkout adds **Kelivo chat sync**: desktop and phone model requests
++include the shared user/assistant history, while syncing never triggers a model or
++tool. See [setup, scope and tests](ds-bot/README.md#kelivo-sync-test-build).
++
+ English | [中文](README.zh.md)
+ 
+ ![version](https://img.shields.io/badge/version-v0.1_preview-blue) ![DSH](https://img.shields.io/badge/DSH-0.2.1--alpha.1-4D6BFE) ![license](https://img.shields.io/badge/license-Apache_2.0-green)
+diff --git a/README.zh.md b/README.zh.md
+index 191f903..0dcd21f 100644
+--- a/README.zh.md
++++ b/README.zh.md
+@@ -7,6 +7,13 @@
+ 
+ # DeepSeek Bot
+ 
++此测试版本新增 **Kelivo 聊天同步**：电脑与手机的模型请求都带上同步后的用户消息和助手回复；同步本身不会触发模型或工具。
++在「Bot 设置 → Kelivo 同步」中配对服务器，再选择同步一个 Bot 的私聊，或将手机对话导入为新 Bot。
++模型、密钥、系统提示、权限、群聊、记忆和附件文件仍由各端独立管理。手机删除对话后保留电脑 Bot，停止该对话的同步；删除电脑 Bot 会删除对应手机对话。
++手机编辑更新模型上下文，DSH 保留原始审计记录；对已压缩或归档内容的编辑会在当前上下文追加明确的修正说明。
++先使用独立 `DSH_HOME` 测试；安装到原有桌面版本时必须保留已有界面和 Session 请求头补丁。
++参见[配置范围及验证方法](ds-bot/README.md#kelivo-sync-test-build)。
++
+ [English](README.md) | 中文
+ 
+ ![版本](https://img.shields.io/badge/版本-v0.1_预览-blue) ![DSH](https://img.shields.io/badge/DSH-0.2.1--alpha.1-4D6BFE) ![许可](https://img.shields.io/badge/许可-Apache_2.0-green)
+diff --git a/ds-bot/README.md b/ds-bot/README.md
+index 707ce04..112de27 100644
+--- a/ds-bot/README.md
++++ b/ds-bot/README.md
+@@ -6,6 +6,50 @@ The DS Bot plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek
+ 
+ Tested with dsh `0.2.1-alpha.1` (Web and Desktop) on Linux.
+ 
++## Kelivo sync (test build)
++
++This checkout adds chat-history sync with the Kelivo Sync M1 server. The sync bridge
++has been tested with DSH `0.2.0-rc.2`, DS Bot `0.1.3`, and Kelivo `1.3.1`.
++**Bot settings → Kelivo sync** pairs this desktop with the server using a one-use
++pairing code. Pair Kelivo with a separate code on the same server.
++
++**Share a Bot chat** creates a Kelivo conversation containing that Bot's own-chat
++history, including earlier conversation parts. **Import a phone chat** creates a
++new Bot with that history; select its model before sending your next message.
++The bridge copies both user and assistant messages into the canonical DSH Session,
++so subsequent model requests include them. It never sends queued prompts, wakes a
++Bot, calls a model, or invokes tools. Automatic sync runs every minute while DSH
++is running; **Sync now** runs it immediately. Model routes, keys, system prompts,
++Bot permissions, group chats, memory, and attachment files remain device-local.
++
++Phone edits update the model-visible message through DSH's public projection API;
++the original audit log remains intact. Deleting a phone conversation pauses that
++link and retains the desktop Bot. Deleting a desktop Bot deletes its linked phone
++conversation. Edits to compacted/archived history append an explicit correction
++to the active context rather than rewriting an old checkpoint. Keep the sync
++plugin installed to replay edited histories. The server stores text in plaintext;
++use HTTPS outside explicit localhost/private-network testing.
++
++Test installation must use a separate `DSH_HOME` and test profile. Do not replace
++the user's existing plugin or point the test bench at their live data. On Windows,
++the existing custom DS Bot client and session-header patches must be preserved
++when installing into the production profile after testing.
++
++The keyless cross-client check uses the real DSH mock bench and real Go server,
++then captures the actual Kelivo model request:
++
++```sh
++npm ci && npm run harness && npm run build
++DSH_HARNESS="$PWD/dev/harness" CONTEXT_WINDOW=100000 CHECK_RATIO=0.45 \
++  dev/bench.sh kelivo-sync 3098 8798 start
++KELIVO_SYNC_SERVER_BINARY=/path/to/kelivo-sync FLUTTER_BIN=/path/to/flutter \
++  KELIVO_REPO=/path/to/kelivo node dev/kelivo-sync-smoke.mjs kelivo-sync 3098
++DSH_HARNESS="$PWD/dev/harness" dev/bench.sh kelivo-sync 3098 8798 stop
++```
++
++`npm test` checks retry receipts, restart replay, role preservation and no Bot
++wakeups against the Go server when `KELIVO_SYNC_SERVER_BINARY` is set.
++
+ ## Features
+ 
+ - **Long-lived Bots**: each Bot is a dsh Session in the "DS Bot" workspace, with its own name, role, instructions and model.
+diff --git a/ds-bot/client.js b/ds-bot/client.js
+index 89eb16e..ef796ce 100644
+--- a/ds-bot/client.js
++++ b/ds-bot/client.js
+@@ -42,6 +42,21 @@ module.exports = __toCommonJS(index_exports);
+ // src/client/i18n.js
+ var NAMESPACE = "ds-bot";
+ var ZH = {
++  "Kelivo sync": "Kelivo 同步",
++  "Share chat history and model context with Kelivo. Sync never starts a model or a tool.": "与 Kelivo 同步聊天记录和模型上下文。同步不会触发模型或工具。",
++  "Sync server": "同步服务器",
++  "Pairing code": "配对码",
++  "Allow local HTTP for testing": "允许本地 HTTP 测试",
++  "Sync now": "立即同步",
++  "Pair": "配对",
++  "Last synced": "最近同步",
++  "Share a Bot chat": "同步一个 Bot 的对话",
++  "Share chat": "同步此对话",
++  "Import a phone chat": "导入手机对话",
++  "Choose a conversation…": "选择对话…",
++  "Import as a new Bot": "导入为新 Bot",
++  "Deleted on phone; desktop history retained": "手机对话已删除，电脑历史保留",
++  "Use a configured Kelivo assistant to reply on your phone. Models, keys, tools and files stay on each device. DSH keeps its audit log when a phone message is edited or deleted.": "手机使用已配置的 Kelivo 助手继续回复。模型、密钥、工具和文件由各端独立配置。手机编辑或删除消息后，DSH 仍保留原始审计记录。",
+   // Shared
+   "Main Bot": "主 Bot",
+   Working: "工作中",
+@@ -1178,8 +1193,8 @@ function bodyOf(def, paint, flat = false) {
+     return "";
+   }
+ }
+-var eyeMarkup = ([cx, cy, w, h33, tilt]) => `<g transform="translate(${cx} ${cy}) rotate(${tilt})"><rect class="bt-eye" x="${-w / 2}" y="${-h33 / 2}" width="${w}" height="${h33}" rx="${w / 2}"/></g>`;
+-var happyEyeMarkup = ([cx, cy, w, h33, tilt]) => `<g transform="translate(${cx} ${cy}) rotate(${tilt})"><path class="bt-eye-happy" opacity="0" d="M${-w * 0.62} ${h33 * 0.14}Q0 ${-h33 * 0.42} ${w * 0.62} ${h33 * 0.14}" fill="none" stroke="#000" stroke-width="${w * 0.5}" stroke-linecap="round"/></g>`;
++var eyeMarkup = ([cx, cy, w, h34, tilt]) => `<g transform="translate(${cx} ${cy}) rotate(${tilt})"><rect class="bt-eye" x="${-w / 2}" y="${-h34 / 2}" width="${w}" height="${h34}" rx="${w / 2}"/></g>`;
++var happyEyeMarkup = ([cx, cy, w, h34, tilt]) => `<g transform="translate(${cx} ${cy}) rotate(${tilt})"><path class="bt-eye-happy" opacity="0" d="M${-w * 0.62} ${h34 * 0.14}Q0 ${-h34 * 0.42} ${w * 0.62} ${h34 * 0.14}" fill="none" stroke="#000" stroke-width="${w * 0.5}" stroke-linecap="round"/></g>`;
+ var maskBox = (size) => `maskUnits="userSpaceOnUse" x="${-size}" y="${-size}" width="${size * 3}" height="${size * 3}"`;
+ var holes = (def, eyes) => `<rect x="${-def.size}" y="${-def.size}" width="${def.size * 3}" height="${def.size * 3}" fill="#fff"/>${eyes}`;
+ var MASK_ID = "%MASK%";
+@@ -1623,12 +1638,12 @@ function liveSprings(apply2) {
+     const dt = Math.min(0.5, Math.max(1e-3, (now - last) / 1e3));
+     last = now;
+     const steps = Math.ceil(dt * 240);
+-    const h33 = dt / steps;
++    const h34 = dt / steps;
+     let moving = false;
+     for (const value of values.values()) {
+       for (let index = 0; index < steps; index += 1) {
+-        value.v += (-value.k * (value.x - value.to) - value.c * value.v) * h33;
+-        value.x += value.v * h33;
++        value.v += (-value.k * (value.x - value.to) - value.c * value.v) * h34;
++        value.x += value.v * h34;
+       }
+       if (Math.abs(value.x - value.to) < 0.05 && Math.abs(value.v) < 1) {
+         value.x = value.to;
+@@ -10262,55 +10277,146 @@ body:not([data-bt-motion=quiet]) .bt-about-mark:hover .bt-mark[data-live][data-s
+ @media (prefers-reduced-motion:reduce){.bt-star:hover .bt-star-icon,.bt-star-count{animation:none}}
+ `;
+ 
+-// src/client/settings.js
++// src/client/kelivo-sync.js
+ var import_react27 = require("react");
++function KelivoSyncPage({ roster }) {
++  const [status, setStatus] = (0, import_react27.useState)(null);
++  const [error, setError] = (0, import_react27.useState)("");
++  const [busy, setBusy] = (0, import_react27.useState)(false);
++  const [server, setServer] = (0, import_react27.useState)("");
++  const [code, setCode] = (0, import_react27.useState)("");
++  const [localHttp, setLocalHttp] = (0, import_react27.useState)(false);
++  const [bot, setBot] = (0, import_react27.useState)("");
++  const [conversation, setConversation] = (0, import_react27.useState)("");
++  (0, import_react27.useEffect)(() => {
++    const controller = new AbortController();
++    const refresh = () => {
++      void call("sync-status", {}, controller.signal).then((value) => {
++        setStatus(value);
++        setServer((current) => current || value.server);
++      }).catch((reason) => {
++        if (!controller.signal.aborted) setError(reason.message);
++      });
++    };
++    refresh();
++    const timer = setInterval(refresh, 15e3);
++    return () => {
++      clearInterval(timer);
++      controller.abort();
++    };
++  }, []);
++  async function run(endpoint, payload = {}) {
++    setBusy(true);
++    setError("");
++    try {
++      setStatus(await call(endpoint, payload));
++      if (endpoint === "sync-pair") setCode("");
++    } catch (reason) {
++      setError(reason.message);
++    } finally {
++      setBusy(false);
++    }
++  }
++  const input = (label, value, change, props = {}) => (0, import_react27.createElement)(
++    "label",
++    { className: "bt-set-row" },
++    (0, import_react27.createElement)("span", null, t(label)),
++    (0, import_react27.createElement)("input", { className: "bt-input", value, onChange: (e) => change(e.target.value), ...props })
++  );
++  const button = (label, endpoint, payload, disabled = false) => (0, import_react27.createElement)("button", {
++    type: "button",
++    className: "bt-soft bt-soft-sm",
++    disabled: busy || disabled,
++    onClick: () => {
++      void run(endpoint, payload);
++    }
++  }, t(label));
++  return (0, import_react27.createElement)(
++    "section",
++    { className: "bt-set-section" },
++    (0, import_react27.createElement)("p", null, t("Share chat history and model context with Kelivo. Sync never starts a model or a tool.")),
++    error || status?.lastError ? (0, import_react27.createElement)("p", { className: "bt-error", role: "alert" }, error || status.lastError) : null,
++    (0, import_react27.createElement)(
++      "div",
++      { className: "bt-set-card" },
++      input("Sync server", server, setServer, { type: "url", placeholder: "https://sync.example.com", disabled: status?.paired }),
++      !status?.paired ? input("Pairing code", code, setCode, { type: "password", autoComplete: "off" }) : null,
++      !status?.paired ? (0, import_react27.createElement)("label", { className: "bt-set-row" }, (0, import_react27.createElement)("input", { type: "checkbox", checked: localHttp, onChange: (e) => setLocalHttp(e.target.checked) }), t("Allow local HTTP for testing")) : null,
++      (0, import_react27.createElement)("div", { className: "bt-actions" }, status?.paired ? [button("Sync now", "sync-run", {}, false), button("Disconnect", "sync-disconnect", {})] : button("Pair", "sync-pair", { server, code, localHttp }, !server || !code)),
++      status?.lastSuccess ? (0, import_react27.createElement)("p", { role: "status" }, `${t("Last synced")}: ${new Date(status.lastSuccess).toLocaleString()}`) : null
++    ),
++    status?.paired ? (0, import_react27.createElement)(
++      "div",
++      { className: "bt-set-card" },
++      (0, import_react27.createElement)("label", { className: "bt-set-row" }, t("Share a Bot chat"), (0, import_react27.createElement)(
++        "select",
++        { className: "bt-select", value: bot, onChange: (e) => setBot(e.target.value) },
++        (0, import_react27.createElement)("option", { value: "" }, t("Choose a Bot…")),
++        roster.bots.filter((b) => !status.bindings.some((link) => link.botId === b.id)).map((b) => (0, import_react27.createElement)("option", { key: b.id, value: b.id }, b.name))
++      )),
++      button("Share chat", "sync-share", { botId: bot }, !bot),
++      (0, import_react27.createElement)("label", { className: "bt-set-row" }, t("Import a phone chat"), (0, import_react27.createElement)(
++        "select",
++        { className: "bt-select", value: conversation, onChange: (e) => setConversation(e.target.value) },
++        (0, import_react27.createElement)("option", { value: "" }, t("Choose a conversation…")),
++        status.conversations.map((c) => (0, import_react27.createElement)("option", { key: c.id, value: c.id }, c.title))
++      )),
++      button("Import as a new Bot", "sync-import", { conversationId: conversation }, !conversation),
++      status.bindings.map((link) => (0, import_react27.createElement)("p", { key: link.botId }, `${roster.bots.find((b) => b.id === link.botId)?.name ?? "Bot"} → ${link.title}${link.deleted ? ` (${t("Deleted on phone; desktop history retained")})` : ""}`))
++    ) : null,
++    (0, import_react27.createElement)("p", { className: "bt-set-hint" }, t("Use a configured Kelivo assistant to reply on your phone. Models, keys, tools and files stay on each device. DSH keeps its audit log when a phone message is edited or deleted."))
++  );
++}
++
++// src/client/settings.js
++var import_react28 = require("react");
+ var capitalize2 = (word) => word[0].toUpperCase() + word.slice(1);
+-var SETTINGS_PAGES = [["general", "General"], ["bots", "Bots"], ["groups", "Group chats"], ["connectors", "Connectors"], ["capabilities", "Capabilities"], ["schedules", "Scheduled tasks"], ["usage", "Usage"], ["secrets", "Secrets"], ["feedback", "Feedback"], ["about", "About DS Bot"]];
+-var PAGE_ICONS = { ...SETTINGS_ICONS, connectors: ConnectorIcon, capabilities: PlugIcon, schedules: ClockIcon, secrets: KeyIcon, feedback: FeedbackIcon, about: InfoIcon };
++var SETTINGS_PAGES = [["general", "General"], ["bots", "Bots"], ["groups", "Group chats"], ["sync", "Kelivo sync"], ["connectors", "Connectors"], ["capabilities", "Capabilities"], ["schedules", "Scheduled tasks"], ["usage", "Usage"], ["secrets", "Secrets"], ["feedback", "Feedback"], ["about", "About DS Bot"]];
++var PAGE_ICONS = { ...SETTINGS_ICONS, sync: ConnectorIcon, connectors: ConnectorIcon, capabilities: PlugIcon, schedules: ClockIcon, secrets: KeyIcon, feedback: FeedbackIcon, about: InfoIcon };
+ function SetSection({ title, children }) {
+-  return (0, import_react27.createElement)("section", { className: "bt-set-section" }, (0, import_react27.createElement)("h3", null, title), (0, import_react27.createElement)("div", { className: "bt-set-card" }, children));
++  return (0, import_react28.createElement)("section", { className: "bt-set-section" }, (0, import_react28.createElement)("h3", null, title), (0, import_react28.createElement)("div", { className: "bt-set-card" }, children));
+ }
+ function SetRow({ label, hint, children }) {
+-  return (0, import_react27.createElement)(
++  return (0, import_react28.createElement)(
+     "div",
+     { className: "bt-set-row" },
+-    (0, import_react27.createElement)("div", { className: "bt-set-copy" }, (0, import_react27.createElement)("span", null, label), hint ? (0, import_react27.createElement)("span", { className: "bt-set-hint" }, hint) : null),
+-    children ? (0, import_react27.createElement)("div", { className: "bt-set-control" }, children) : null
++    (0, import_react28.createElement)("div", { className: "bt-set-copy" }, (0, import_react28.createElement)("span", null, label), hint ? (0, import_react28.createElement)("span", { className: "bt-set-hint" }, hint) : null),
++    children ? (0, import_react28.createElement)("div", { className: "bt-set-control" }, children) : null
+   );
+ }
+ function GeneralPage({ roster, actions, run }) {
+   const prefs = roster.prefs ?? {};
+   const themes = allThemes();
+   const current = themes[prefs.theme] ? prefs.theme : "deepseek";
+-  const [custom, setCustom] = (0, import_react27.useState)(prefs.accent ?? "#4d6bfe");
+-  const timer = (0, import_react27.useRef)(0);
+-  (0, import_react27.useEffect)(() => () => clearTimeout(timer.current), []);
++  const [custom, setCustom] = (0, import_react28.useState)(prefs.accent ?? "#4d6bfe");
++  const timer = (0, import_react28.useRef)(0);
++  (0, import_react28.useEffect)(() => () => clearTimeout(timer.current), []);
+   const pickCustom = (value) => {
+     setCustom(value);
+     clearTimeout(timer.current);
+     timer.current = setTimeout(() => run(actions.setPrefs({ accent: value })), 350);
+   };
+   return [
+-    (0, import_react27.createElement)(
++    (0, import_react28.createElement)(
+       SetSection,
+       { key: "look", title: t("Appearance") },
+-      (0, import_react27.createElement)(
++      (0, import_react28.createElement)(
+         SetRow,
+         { label: t("Theme"), hint: t("Colors for the whole team, on every device.") },
+-        (0, import_react27.createElement)(
++        (0, import_react28.createElement)(
+           "select",
+           { className: "bt-select", "aria-label": t("Theme"), value: current, onChange: (event) => run(actions.setPrefs({ theme: event.target.value })) },
+-          Object.entries(themes).map(([id, theme]) => (0, import_react27.createElement)("option", { key: id, value: id }, t(theme.label)))
++          Object.entries(themes).map(([id, theme]) => (0, import_react28.createElement)("option", { key: id, value: id }, t(theme.label)))
+         )
+       ),
+-      (0, import_react27.createElement)(
++      (0, import_react28.createElement)(
+         SetRow,
+         { label: t("Accent"), hint: t("Unread marks, badges, and the brand mark.") },
+-        (0, import_react27.createElement)(
++        (0, import_react28.createElement)(
+           "div",
+           { className: "bt-swatches" },
+-          (0, import_react27.createElement)("button", { type: "button", className: "bt-swatch bt-swatch-default", title: t("Theme accent"), "aria-label": t("Theme accent"), "aria-pressed": !prefs.accent, onClick: () => run(actions.setPrefs({ accent: null })) }),
+-          ACCENT_INKS.map((ink) => (0, import_react27.createElement)("button", {
++          (0, import_react28.createElement)("button", { type: "button", className: "bt-swatch bt-swatch-default", title: t("Theme accent"), "aria-label": t("Theme accent"), "aria-pressed": !prefs.accent, onClick: () => run(actions.setPrefs({ accent: null })) }),
++          ACCENT_INKS.map((ink) => (0, import_react28.createElement)("button", {
+             key: ink,
+             type: "button",
+             className: "bt-swatch",
+@@ -10320,21 +10426,21 @@ function GeneralPage({ roster, actions, run }) {
+             style: { background: INKS[ink][0] },
+             onClick: () => run(actions.setPrefs({ accent: INKS[ink][0] }))
+           })),
+-          (0, import_react27.createElement)(
++          (0, import_react28.createElement)(
+             "label",
+             { className: "bt-swatch bt-swatch-custom", title: t("Custom accent"), "data-on": Boolean(prefs.accent) && !ACCENT_INKS.some((ink) => INKS[ink][0] === prefs.accent) },
+-            (0, import_react27.createElement)("input", { type: "color", value: custom, "aria-label": t("Custom accent"), onChange: (event) => pickCustom(event.target.value) })
++            (0, import_react28.createElement)("input", { type: "color", value: custom, "aria-label": t("Custom accent"), onChange: (event) => pickCustom(event.target.value) })
+           )
+         )
+       )
+     ),
+-    (0, import_react27.createElement)(
++    (0, import_react28.createElement)(
+       SetSection,
+       { key: "mode", title: t("Mode") },
+-      (0, import_react27.createElement)(
++      (0, import_react28.createElement)(
+         SetRow,
+         { label: t("Classic Agent mode") },
+-        (0, import_react27.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm", onClick: () => actions.setSurface("agent") }, t("Switch"))
++        (0, import_react28.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm", onClick: () => actions.setSurface("agent") }, t("Switch"))
+       )
+     )
+   ];
+@@ -10343,52 +10449,52 @@ function MainBotsSection({ roster, actions, run }) {
+   const mains = (roster.mainBotIds ?? []).map((id) => roster.byId[id]).filter(Boolean);
+   const [first, ...others] = mains;
+   const candidates = roster.bots.filter((bot) => !isMainOf(roster, bot.id));
+-  return (0, import_react27.createElement)(
++  return (0, import_react28.createElement)(
+     SetSection,
+     { title: t("Main Bot") },
+-    (0, import_react27.createElement)(
++    (0, import_react28.createElement)(
+       SetRow,
+       {
+         label: t("Main Bot"),
+         hint: first ? t("First in the sidebar. Pick another Bot to hand it the role; {name} then stops being a Main Bot.", { name: first.name }) : void 0
+       },
+-      (0, import_react27.createElement)("select", {
++      (0, import_react28.createElement)("select", {
+         className: "bt-select",
+         "aria-label": t("Main Bot"),
+         value: first?.id ?? "",
+         onChange: (event) => run(actions.setMain(event.target.value, true, first ? { replace: first.id } : {}))
+-      }, first ? null : (0, import_react27.createElement)("option", { value: "" }, t("Choose a Bot…")), roster.bots.map((bot) => (0, import_react27.createElement)("option", { key: bot.id, value: bot.id }, bot.name)))
++      }, first ? null : (0, import_react28.createElement)("option", { value: "" }, t("Choose a Bot…")), roster.bots.map((bot) => (0, import_react28.createElement)("option", { key: bot.id, value: bot.id }, bot.name)))
+     ),
+-    others.map((bot) => (0, import_react27.createElement)(
++    others.map((bot) => (0, import_react28.createElement)(
+       SetRow,
+       { key: bot.id, label: bot.name, hint: t("Also a Main Bot.") },
+-      (0, import_react27.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm", onClick: () => run(actions.setMain(bot.id, true, { primary: true })) }, t("Move to first")),
+-      (0, import_react27.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm", onClick: () => run(actions.setMain(bot.id, false)) }, t("Remove Main Bot role"))
++      (0, import_react28.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm", onClick: () => run(actions.setMain(bot.id, true, { primary: true })) }, t("Move to first")),
++      (0, import_react28.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm", onClick: () => run(actions.setMain(bot.id, false)) }, t("Remove Main Bot role"))
+     )),
+-    candidates.length > 0 ? (0, import_react27.createElement)(
++    candidates.length > 0 ? (0, import_react28.createElement)(
+       SetRow,
+       { label: t("Add a Main Bot"), hint: t("Main Bots can create and change Bots, and run every group chat.") },
+-      (0, import_react27.createElement)("select", {
++      (0, import_react28.createElement)("select", {
+         className: "bt-select",
+         "aria-label": t("Add a Main Bot"),
+         value: "",
+         onChange: (event) => {
+           if (event.target.value) void run(actions.setMain(event.target.value, true));
+         }
+-      }, (0, import_react27.createElement)("option", { value: "" }, t("Choose a Bot…")), candidates.map((bot) => (0, import_react27.createElement)("option", { key: bot.id, value: bot.id }, bot.name)))
++      }, (0, import_react28.createElement)("option", { value: "" }, t("Choose a Bot…")), candidates.map((bot) => (0, import_react28.createElement)("option", { key: bot.id, value: bot.id }, bot.name)))
+     ) : null
+   );
+ }
+ var MOTIONS = [["quiet", "Quiet"], ["normal", "Normal"], ["lively", "Lively"]];
+ function MotionSection({ roster, actions, run }) {
+   const motion = roster.prefs?.motion === "quiet" || roster.prefs?.motion === "lively" ? roster.prefs.motion : "normal";
+-  return (0, import_react27.createElement)(
++  return (0, import_react28.createElement)(
+     SetSection,
+     { title: t("Animation") },
+-    (0, import_react27.createElement)(
++    (0, import_react28.createElement)(
+       SetRow,
+       { label: t("Bot animation") },
+-      (0, import_react27.createElement)(Segmented, { label: t("Bot animation"), value: motion, className: "bt-motion-seg" }, MOTIONS.map(([id, label]) => (0, import_react27.createElement)("button", {
++      (0, import_react28.createElement)(Segmented, { label: t("Bot animation"), value: motion, className: "bt-motion-seg" }, MOTIONS.map(([id, label]) => (0, import_react28.createElement)("button", {
+         key: id,
+         type: "button",
+         "aria-pressed": motion === id,
+@@ -10400,69 +10506,69 @@ function MotionSection({ roster, actions, run }) {
+   );
+ }
+ function BotsPage({ roster, actions, run }) {
+-  const [creating, setCreating] = (0, import_react27.useState)(false);
++  const [creating, setCreating] = (0, import_react28.useState)(false);
+   return [
+-    (0, import_react27.createElement)(MainBotsSection, { key: "main", roster, actions, run }),
+-    (0, import_react27.createElement)(MotionSection, { key: "motion", roster, actions, run }),
+-    creating ? (0, import_react27.createElement)(CreateBot, { key: "create", roster, actions, inline: true, onBack: () => setCreating(false), onCreated: (bot) => actions.openSettings("bots", bot.id) }) : (0, import_react27.createElement)(
++    (0, import_react28.createElement)(MainBotsSection, { key: "main", roster, actions, run }),
++    (0, import_react28.createElement)(MotionSection, { key: "motion", roster, actions, run }),
++    creating ? (0, import_react28.createElement)(CreateBot, { key: "create", roster, actions, inline: true, onBack: () => setCreating(false), onCreated: (bot) => actions.openSettings("bots", bot.id) }) : (0, import_react28.createElement)(
+       "div",
+       { key: "new", className: "bt-actions" },
+-      (0, import_react27.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm bt-with-icon", onClick: () => setCreating(true) }, (0, import_react27.createElement)(PlusIcon), t("New Bot"))
++      (0, import_react28.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm bt-with-icon", onClick: () => setCreating(true) }, (0, import_react28.createElement)(PlusIcon), t("New Bot"))
+     ),
+-    (0, import_react27.createElement)(
++    (0, import_react28.createElement)(
+       SetSection,
+       { key: "bots", title: t("Bots · {count}", { count: roster.bots.length }) },
+-      roster.bots.map((bot) => (0, import_react27.createElement)(
++      roster.bots.map((bot) => (0, import_react28.createElement)(
+         "button",
+         { key: bot.id, type: "button", className: "bt-set-row", onClick: () => actions.openSettings("bots", bot.id) },
+-        (0, import_react27.createElement)(
++        (0, import_react28.createElement)(
+           "span",
+           { className: "bt-set-bot" },
+-          (0, import_react27.createElement)(BotAvatar, { bot, size: 28, badge: false, live: false }),
+-          (0, import_react27.createElement)("span", { className: "bt-row-title" }, bot.name),
+-          bot.role ? (0, import_react27.createElement)("span", { className: "bt-tag" }, bot.role) : null,
+-          isMainOf(roster, bot.id) ? (0, import_react27.createElement)("span", { className: "bt-tag" }, t("Main Bot")) : null,
+-          bot.hidden && !isMainOf(roster, bot.id) ? (0, import_react27.createElement)("span", { className: "bt-tag" }, t("Hidden")) : null
++          (0, import_react28.createElement)(BotAvatar, { bot, size: 28, badge: false, live: false }),
++          (0, import_react28.createElement)("span", { className: "bt-row-title" }, bot.name),
++          bot.role ? (0, import_react28.createElement)("span", { className: "bt-tag" }, bot.role) : null,
++          isMainOf(roster, bot.id) ? (0, import_react28.createElement)("span", { className: "bt-tag" }, t("Main Bot")) : null,
++          bot.hidden && !isMainOf(roster, bot.id) ? (0, import_react28.createElement)("span", { className: "bt-tag" }, t("Hidden")) : null
+         ),
+-        (0, import_react27.createElement)("span", { className: "bt-chevron" }, (0, import_react27.createElement)(ChevronRightIcon))
++        (0, import_react28.createElement)("span", { className: "bt-chevron" }, (0, import_react28.createElement)(ChevronRightIcon))
+       ))
+     )
+   ];
+ }
+ function GroupsPage({ roster, actions, run }) {
+-  const [creating, setCreating] = (0, import_react27.useState)(false);
++  const [creating, setCreating] = (0, import_react28.useState)(false);
+   return [
+-    creating ? (0, import_react27.createElement)(NewGroupForm, { key: "create", roster, actions, run, onCancel: () => setCreating(false), onCreated: (room2) => actions.openSettings("groups", room2.id) }) : (0, import_react27.createElement)(
++    creating ? (0, import_react28.createElement)(NewGroupForm, { key: "create", roster, actions, run, onCancel: () => setCreating(false), onCreated: (room2) => actions.openSettings("groups", room2.id) }) : (0, import_react28.createElement)(
+       "div",
+       { key: "new", className: "bt-actions" },
+-      (0, import_react27.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm bt-with-icon", disabled: roster.bots.length < 2, title: roster.bots.length < 2 ? t("A group chat needs at least two Bots") : void 0, onClick: () => setCreating(true) }, (0, import_react27.createElement)(PlusIcon), t("Create group chat"))
++      (0, import_react28.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm bt-with-icon", disabled: roster.bots.length < 2, title: roster.bots.length < 2 ? t("A group chat needs at least two Bots") : void 0, onClick: () => setCreating(true) }, (0, import_react28.createElement)(PlusIcon), t("Create group chat"))
+     ),
+-    (0, import_react27.createElement)(
++    (0, import_react28.createElement)(
+       SetSection,
+       { key: "groups", title: t("Group chats · {count}", { count: roster.rooms.length }) },
+-      roster.rooms.length === 0 ? (0, import_react27.createElement)(SetRow, { label: t("No group chats yet."), hint: t("A group chat lets several Bots work on one thing with you.") }) : roster.rooms.map((room2) => {
++      roster.rooms.length === 0 ? (0, import_react28.createElement)(SetRow, { label: t("No group chats yet."), hint: t("A group chat lets several Bots work on one thing with you.") }) : roster.rooms.map((room2) => {
+         const admin = roster.byId[room2.admin];
+-        return (0, import_react27.createElement)(
++        return (0, import_react28.createElement)(
+           "button",
+           { key: room2.id, type: "button", className: "bt-set-row", onClick: () => actions.openSettings("groups", room2.id) },
+-          (0, import_react27.createElement)(
++          (0, import_react28.createElement)(
+             "span",
+             { className: "bt-set-bot" },
+-            (0, import_react27.createElement)(RoomAvatar, { room: room2, roster, size: 28 }),
+-            (0, import_react27.createElement)("span", { className: "bt-row-title" }, room2.name),
+-            (0, import_react27.createElement)("span", { className: "bt-tag" }, t("{count} members", { count: room2.members.length })),
+-            admin ? (0, import_react27.createElement)("span", { className: "bt-tag bt-tag-admin" }, (0, import_react27.createElement)(AdminStar), admin.name) : null,
+-            room2.hidden ? (0, import_react27.createElement)("span", { className: "bt-tag" }, t("Hidden")) : null
++            (0, import_react28.createElement)(RoomAvatar, { room: room2, roster, size: 28 }),
++            (0, import_react28.createElement)("span", { className: "bt-row-title" }, room2.name),
++            (0, import_react28.createElement)("span", { className: "bt-tag" }, t("{count} members", { count: room2.members.length })),
++            admin ? (0, import_react28.createElement)("span", { className: "bt-tag bt-tag-admin" }, (0, import_react28.createElement)(AdminStar), admin.name) : null,
++            room2.hidden ? (0, import_react28.createElement)("span", { className: "bt-tag" }, t("Hidden")) : null
+           ),
+-          (0, import_react27.createElement)("span", { className: "bt-chevron" }, (0, import_react27.createElement)(ChevronRightIcon))
++          (0, import_react28.createElement)("span", { className: "bt-chevron" }, (0, import_react28.createElement)(ChevronRightIcon))
+         );
+       })
+     )
+   ];
+ }
+ function SettingsDialog({ page, id, roster, actions, useUpdate, leaving = false }) {
+-  const [error, setError] = (0, import_react27.useState)("");
+-  const close = (0, import_react27.useCallback)(() => actions.closeSettings(), []);
++  const [error, setError] = (0, import_react28.useState)("");
++  const close = (0, import_react28.useCallback)(() => actions.closeSettings(), []);
+   useEscape(close);
+   const run = (promise) => Promise.resolve(promise).then(() => {
+     setError("");
+@@ -10480,32 +10586,32 @@ function SettingsDialog({ page, id, roster, actions, useUpdate, leaving = false
+   const nav = useGlide(shown, { axis: "y" });
+   const pageKey = `${shown}:${bot?.id ?? room2?.id ?? ""}`;
+   const depth = bot || room2 ? 1 : 0;
+-  const last = (0, import_react27.useRef)({ key: pageKey, depth, move: "up" });
++  const last = (0, import_react28.useRef)({ key: pageKey, depth, move: "up" });
+   if (last.current.key !== pageKey) {
+     last.current = { key: pageKey, depth, move: depth > last.current.depth ? "in" : depth < last.current.depth ? "out" : "up" };
+   }
+-  const [usageOpened, setUsageOpened] = (0, import_react27.useState)(shown === "usage");
++  const [usageOpened, setUsageOpened] = (0, import_react28.useState)(shown === "usage");
+   if (shown === "usage" && !usageOpened) setUsageOpened(true);
+-  const errorLine = error ? (0, import_react27.createElement)("div", { className: "bt-error", role: "alert", style: { padding: 0 } }, error) : null;
+-  return (0, import_react27.createElement)(
++  const errorLine = error ? (0, import_react28.createElement)("div", { className: "bt-error", role: "alert", style: { padding: 0 } }, error) : null;
++  return (0, import_react28.createElement)(
+     "div",
+     { className: "bt-settings-layer", "data-leaving": leaving || void 0 },
+-    (0, import_react27.createElement)("div", { className: "bt-scrim", onMouseDown: close }),
+-    (0, import_react27.createElement)(
++    (0, import_react28.createElement)("div", { className: "bt-scrim", onMouseDown: close }),
++    (0, import_react28.createElement)(
+       "div",
+       { className: "bt-settings", role: "dialog", "aria-modal": true, "aria-label": t("DS Bot settings"), "data-wide": shown === "usage" ? "" : void 0 },
+-      (0, import_react27.createElement)(
++      (0, import_react28.createElement)(
+         "nav",
+         { ref: nav.box, className: "bt-settings-nav", "aria-label": t("Settings pages") },
+-        (0, import_react27.createElement)("span", { ref: nav.thumb, className: "bt-thumb", "aria-hidden": true }),
+-        SETTINGS_PAGES.map(([key, text]) => (0, import_react27.createElement)("button", {
++        (0, import_react28.createElement)("span", { ref: nav.thumb, className: "bt-thumb", "aria-hidden": true }),
++        SETTINGS_PAGES.map(([key, text]) => (0, import_react28.createElement)("button", {
+           key,
+           type: "button",
+           className: "bt-settings-item",
+           "aria-current": shown === key ? "page" : void 0,
+           onClick: () => actions.openSettings(key)
+-        }, (0, import_react27.createElement)(PAGE_ICONS[key]), t(text))),
+-        (0, import_react27.createElement)("button", {
++        }, (0, import_react28.createElement)(PAGE_ICONS[key]), t(text))),
++        (0, import_react28.createElement)("button", {
+           type: "button",
+           className: "bt-settings-item bt-settings-shell",
+           title: t("Models, providers, and the rest of DeepSeek Harness"),
+@@ -10513,64 +10619,65 @@ function SettingsDialog({ page, id, roster, actions, useUpdate, leaving = false
+             close();
+             openHarnessSettings();
+           }
+-        }, (0, import_react27.createElement)(SlidersIcon), t("Harness settings"))
++        }, (0, import_react28.createElement)(SlidersIcon), t("Harness settings"))
+       ),
+-      (0, import_react27.createElement)(
++      (0, import_react28.createElement)(
+         "div",
+         { className: "bt-settings-main" },
+-        (0, import_react27.createElement)(
++        (0, import_react28.createElement)(
+           "div",
+           { className: "bt-settings-head" },
+-          back ? (0, import_react27.createElement)("button", { type: "button", className: "bt-icon-btn", "aria-label": back, title: back, onClick: () => actions.openSettings(shown) }, (0, import_react27.createElement)(ChevronLeftIcon)) : null,
+-          (0, import_react27.createElement)("h2", { key: bot?.id ?? room2?.id ?? shown }, bot?.name ?? room2?.name ?? label)
++          back ? (0, import_react28.createElement)("button", { type: "button", className: "bt-icon-btn", "aria-label": back, title: back, onClick: () => actions.openSettings(shown) }, (0, import_react28.createElement)(ChevronLeftIcon)) : null,
++          (0, import_react28.createElement)("h2", { key: bot?.id ?? room2?.id ?? shown }, bot?.name ?? room2?.name ?? label)
+         ),
+-        shown === "usage" ? null : (0, import_react27.createElement)(
++        shown === "usage" ? null : (0, import_react28.createElement)(
+           "div",
+           { key: pageKey, className: "bt-settings-scroll bt-settings-page", "data-move": last.current.move },
+           errorLine,
+-          shown === "general" ? (0, import_react27.createElement)(GeneralPage, { roster, actions, run }) : null,
+-          bot ? (0, import_react27.createElement)("div", { className: "bt-settings-form" }, (0, import_react27.createElement)(BotSettingsForm, { key: bot.id, bot, roster, actions, run })) : null,
+-          shown === "bots" && !bot ? (0, import_react27.createElement)(BotsPage, { roster, actions, run }) : null,
+-          room2 ? (0, import_react27.createElement)("div", { className: "bt-settings-form" }, (0, import_react27.createElement)(GroupSettingsForm, { key: room2.id, room: room2, roster, actions, run })) : null,
+-          shown === "groups" && !room2 ? (0, import_react27.createElement)(GroupsPage, { roster, actions, run }) : null,
+-          shown === "connectors" ? (0, import_react27.createElement)(ConnectorsPage, { roster, actions }) : null,
+-          shown === "capabilities" ? (0, import_react27.createElement)(CapabilitiesPage, { roster, actions, run }) : null,
+-          shown === "schedules" ? (0, import_react27.createElement)(SchedulesPage, { roster, actions, start: id ?? void 0 }) : null,
+-          shown === "secrets" ? (0, import_react27.createElement)(SecretsPage, { roster, actions, run, Section: SetSection }) : null,
+-          shown === "feedback" ? (0, import_react27.createElement)(FeedbackPage, { actions, run, Section: SetSection, Row: SetRow }) : null,
+-          shown === "about" ? (0, import_react27.createElement)(AboutPage, { useUpdate, actions, run, Section: SetSection, Row: SetRow }) : null
++          shown === "general" ? (0, import_react28.createElement)(GeneralPage, { roster, actions, run }) : null,
++          shown === "sync" ? (0, import_react28.createElement)(KelivoSyncPage, { roster }) : null,
++          bot ? (0, import_react28.createElement)("div", { className: "bt-settings-form" }, (0, import_react28.createElement)(BotSettingsForm, { key: bot.id, bot, roster, actions, run })) : null,
++          shown === "bots" && !bot ? (0, import_react28.createElement)(BotsPage, { roster, actions, run }) : null,
++          room2 ? (0, import_react28.createElement)("div", { className: "bt-settings-form" }, (0, import_react28.createElement)(GroupSettingsForm, { key: room2.id, room: room2, roster, actions, run })) : null,
++          shown === "groups" && !room2 ? (0, import_react28.createElement)(GroupsPage, { roster, actions, run }) : null,
++          shown === "connectors" ? (0, import_react28.createElement)(ConnectorsPage, { roster, actions }) : null,
++          shown === "capabilities" ? (0, import_react28.createElement)(CapabilitiesPage, { roster, actions, run }) : null,
++          shown === "schedules" ? (0, import_react28.createElement)(SchedulesPage, { roster, actions, start: id ?? void 0 }) : null,
++          shown === "secrets" ? (0, import_react28.createElement)(SecretsPage, { roster, actions, run, Section: SetSection }) : null,
++          shown === "feedback" ? (0, import_react28.createElement)(FeedbackPage, { actions, run, Section: SetSection, Row: SetRow }) : null,
++          shown === "about" ? (0, import_react28.createElement)(AboutPage, { useUpdate, actions, run, Section: SetSection, Row: SetRow }) : null
+         ),
+-        usageOpened ? (0, import_react27.createElement)(
++        usageOpened ? (0, import_react28.createElement)(
+           "div",
+           { key: "usage", className: "bt-settings-scroll bt-settings-usage", "data-off": shown === "usage" ? void 0 : "", "aria-hidden": shown === "usage" ? void 0 : true },
+           shown === "usage" ? errorLine : null,
+-          (0, import_react27.createElement)(UsagePage, { roster, actions, focusId: usageFocus })
++          (0, import_react28.createElement)(UsagePage, { roster, actions, focusId: usageFocus })
+         ) : null
+       ),
+-      (0, import_react27.createElement)("button", { type: "button", className: "bt-settings-close", "aria-label": t("Close settings"), onClick: close }, (0, import_react27.createElement)(CloseIcon))
++      (0, import_react28.createElement)("button", { type: "button", className: "bt-settings-close", "aria-label": t("Close settings"), onClick: close }, (0, import_react28.createElement)(CloseIcon))
+     )
+   );
+ }
+ 
+ // src/client/context-menu.js
+-var import_react28 = require("react");
++var import_react29 = require("react");
+ function ContextMenu({ menu, roster, actions, leaving = false }) {
+   useEscape(() => actions.closeMenu());
+-  (0, import_react28.useEffect)(() => {
++  (0, import_react29.useEffect)(() => {
+     const onDown = (event) => {
+       if (!(event.target instanceof Element) || !event.target.closest(".bt-menu")) actions.closeMenu();
+     };
+     window.addEventListener("mousedown", onDown);
+     return () => window.removeEventListener("mousedown", onDown);
+   }, []);
+-  const ref = (0, import_react28.useRef)(null);
+-  const [place, setPlace] = (0, import_react28.useState)({ left: menu.x, top: menu.y });
+-  (0, import_react28.useLayoutEffect)(() => {
++  const ref = (0, import_react29.useRef)(null);
++  const [place, setPlace] = (0, import_react29.useState)({ left: menu.x, top: menu.y });
++  (0, import_react29.useLayoutEffect)(() => {
+     const box = ref.current?.getBoundingClientRect();
+     if (!box) return;
+     setPlace({ left: Math.max(8, Math.min(menu.x, window.innerWidth - box.width - 8)), top: Math.max(8, Math.min(menu.y, window.innerHeight - box.height - 8)) });
+   }, [menu.x, menu.y]);
+-  if (menu.kind === "agent" || menu.kind === "agent-session") return (0, import_react28.createElement)(AgentMenu, { menu, roster, actions, leaving });
++  if (menu.kind === "agent" || menu.kind === "agent-session") return (0, import_react29.createElement)(AgentMenu, { menu, roster, actions, leaving });
+   const bot = roster.byId[menu.id];
+   const room2 = roster.roomsById[menu.id];
+   const entry = bot ?? room2;
+@@ -10601,14 +10708,14 @@ function ContextMenu({ menu, roster, actions, leaving = false }) {
+       isMainBot ? null : [room2 ? t("Delete group") : t("Delete"), TrashIcon, () => bot ? actions.deleteBot(bot.id) : actions.deleteRoom(menu.id), true]
+     ]
+   ].map((group) => group.filter(Boolean)).filter((group) => group.length > 0);
+-  return (0, import_react28.createElement)(
++  return (0, import_react29.createElement)(
+     "div",
+     { ref, className: "bt-menu", role: "menu", "aria-label": t("{name} actions", { name: bot?.name ?? room2.name }), style: place, "data-leaving": leaving || void 0 },
+-    groups.map((group, index) => (0, import_react28.createElement)(
+-      import_react28.Fragment,
++    groups.map((group, index) => (0, import_react29.createElement)(
++      import_react29.Fragment,
+       { key: index },
+-      index > 0 ? (0, import_react28.createElement)("div", { className: "bt-menu-sep", role: "separator" }) : null,
+-      group.map(([label, Icon, run, danger]) => (0, import_react28.createElement)("button", {
++      index > 0 ? (0, import_react29.createElement)("div", { className: "bt-menu-sep", role: "separator" }) : null,
++      group.map(([label, Icon, run, danger]) => (0, import_react29.createElement)("button", {
+         key: label,
+         type: "button",
+         role: "menuitem",
+@@ -10617,14 +10724,14 @@ function ContextMenu({ menu, roster, actions, leaving = false }) {
+           actions.closeMenu();
+           void Promise.resolve(run()).catch((error) => actions.reportError(error, "menu"));
+         }
+-      }, (0, import_react28.createElement)(Icon), label))
++      }, (0, import_react29.createElement)(Icon), label))
+     ))
+   );
+ }
+ function AgentMenu({ menu, roster, actions, leaving }) {
+-  const ref = (0, import_react28.useRef)(null);
+-  const [place, setPlace] = (0, import_react28.useState)({ left: menu.x, top: menu.y });
+-  (0, import_react28.useLayoutEffect)(() => {
++  const ref = (0, import_react29.useRef)(null);
++  const [place, setPlace] = (0, import_react29.useState)({ left: menu.x, top: menu.y });
++  (0, import_react29.useLayoutEffect)(() => {
+     const box = ref.current?.getBoundingClientRect();
+     if (!box) return;
+     setPlace({ left: Math.max(8, Math.min(menu.x, window.innerWidth - box.width - 8)), top: Math.max(8, Math.min(menu.y, window.innerHeight - box.height - 8)) });
+@@ -10646,14 +10753,14 @@ function AgentMenu({ menu, roster, actions, leaving }) {
+       [t("Archive"), TrashIcon, () => actions.archiveAgentSession(agent.id, menu.id), true]
+     ]
+   ];
+-  return (0, import_react28.createElement)(
++  return (0, import_react29.createElement)(
+     "div",
+     { ref, className: "bt-menu", role: "menu", "aria-label": menu.kind === "agent" ? "DSH Agent" : t("Session actions"), style: place, "data-leaving": leaving || void 0 },
+-    groups.map((group, index) => (0, import_react28.createElement)(
+-      import_react28.Fragment,
++    groups.map((group, index) => (0, import_react29.createElement)(
++      import_react29.Fragment,
+       { key: index },
+-      index > 0 ? (0, import_react28.createElement)("div", { className: "bt-menu-sep", role: "separator" }) : null,
+-      group.map(([label, Icon, run, danger]) => (0, import_react28.createElement)("button", {
++      index > 0 ? (0, import_react29.createElement)("div", { className: "bt-menu-sep", role: "separator" }) : null,
++      group.map(([label, Icon, run, danger]) => (0, import_react29.createElement)("button", {
+         key: label,
+         type: "button",
+         role: "menuitem",
+@@ -10662,7 +10769,7 @@ function AgentMenu({ menu, roster, actions, leaving }) {
+           actions.closeMenu();
+           void Promise.resolve(run()).catch((error) => console.warn("[ds-bot]", error));
+         }
+-      }, (0, import_react28.createElement)(Icon), label))
++      }, (0, import_react29.createElement)(Icon), label))
+     ))
+   );
+ }
+@@ -10733,7 +10840,7 @@ function migrateStorage(storage = globalThis.localStorage) {
+ }
+ 
+ // src/client/member-status.js
+-var import_react29 = require("react");
++var import_react30 = require("react");
+ var NO_WORK = { bots: {}, approvals: [] };
+ function memberWork(room2, work = NO_WORK) {
+   return room2.members.map((id) => {
+@@ -10756,10 +10863,10 @@ function summaryText(busy) {
+   return { waiting, doing };
+ }
+ function Face({ entry, size }) {
+-  return (0, import_react29.createElement)(
++  return (0, import_react30.createElement)(
+     "span",
+     { className: "bt-mw-face", "data-ask": entry.state === "ask" || void 0 },
+-    (0, import_react29.createElement)(BotMark, { bot: entry.bot, size, state: entry.state === "ask" ? "alert" : toolState(entry.doing?.tool ?? "") })
++    (0, import_react30.createElement)(BotMark, { bot: entry.bot, size, state: entry.state === "ask" ? "alert" : toolState(entry.doing?.tool ?? "") })
+   );
+ }
+ function MemberDock({ sessionId, useRoster, useWork, actions }) {
+@@ -10770,22 +10877,22 @@ function MemberDock({ sessionId, useRoster, useWork, actions }) {
+   const busy = busyMembers(room2, work, roster);
+   if (busy.length === 0) return null;
+   const { waiting, doing } = summaryText(busy);
+-  return (0, import_react29.createElement)(
++  return (0, import_react30.createElement)(
+     "div",
+     { className: "bt-event bt-mw-dock" },
+-    (0, import_react29.createElement)(
++    (0, import_react30.createElement)(
+       "button",
+       { type: "button", className: "bt-event-whole bt-mw-line", "aria-label": [waiting, doing].filter(Boolean).join(" · "), onClick: () => actions.showDetails(sessionId) },
+-      (0, import_react29.createElement)("span", { className: "bt-mw-stack", "aria-hidden": true }, busy.slice(0, 4).map((entry) => (0, import_react29.createElement)(Face, { key: entry.id, entry, size: 16 }))),
+-      waiting ? (0, import_react29.createElement)("span", { className: "bt-mw-ask" }, waiting) : null,
+-      waiting && doing ? (0, import_react29.createElement)("span", { "aria-hidden": true }, "·") : null,
+-      doing ? (0, import_react29.createElement)("span", { className: "bt-event-name" }, (0, import_react29.createElement)(Shimmer, null, doing)) : null
++      (0, import_react30.createElement)("span", { className: "bt-mw-stack", "aria-hidden": true }, busy.slice(0, 4).map((entry) => (0, import_react30.createElement)(Face, { key: entry.id, entry, size: 16 }))),
++      waiting ? (0, import_react30.createElement)("span", { className: "bt-mw-ask" }, waiting) : null,
++      waiting && doing ? (0, import_react30.createElement)("span", { "aria-hidden": true }, "·") : null,
++      doing ? (0, import_react30.createElement)("span", { className: "bt-event-name" }, (0, import_react30.createElement)(Shimmer, null, doing)) : null
+     )
+   );
+ }
+ function useNow2(active) {
+-  const [now, setNow] = (0, import_react29.useState)(Date.now);
+-  (0, import_react29.useEffect)(() => {
++  const [now, setNow] = (0, import_react30.useState)(Date.now);
++  (0, import_react30.useEffect)(() => {
+     if (!active) return void 0;
+     const timer = setInterval(() => setNow(Date.now()), 3e4);
+     return () => clearInterval(timer);
+@@ -10794,45 +10901,45 @@ function useNow2(active) {
+ }
+ var since = (now, at) => typeof at === "number" && now - at >= 6e4 ? ` · ${elapsedLabel(now - at)}` : "";
+ function ApprovalCard({ approval, bot, actions }) {
+-  const [busy, setBusy] = (0, import_react29.useState)(false);
++  const [busy, setBusy] = (0, import_react30.useState)(false);
+   const answer = (choice) => {
+     setBusy(true);
+     void Promise.resolve(actions.answerApproval(approval.id, choice)).catch((error) => actions.reportError(error, "approval")).finally(() => setBusy(false));
+   };
+-  return (0, import_react29.createElement)(
++  return (0, import_react30.createElement)(
+     "div",
+     { className: "bt-mw-card", role: "group", "aria-label": t("{name} is waiting for your approval", { name: bot.name }) },
+-    (0, import_react29.createElement)("div", { className: "bt-mw-tool" }, approval.tool),
+-    approval.detail?.text ? (0, import_react29.createElement)("div", { className: "bt-mw-text" }, approval.detail.text) : null,
+-    approval.reason ? (0, import_react29.createElement)("div", { className: "bt-mw-reason" }, approval.reason) : null,
+-    approval.detail?.code ? (0, import_react29.createElement)("code", { className: "bt-mw-code", title: approval.detail.code }, approval.detail.code) : null,
+-    approval.answerable ? (0, import_react29.createElement)(
++    (0, import_react30.createElement)("div", { className: "bt-mw-tool" }, approval.tool),
++    approval.detail?.text ? (0, import_react30.createElement)("div", { className: "bt-mw-text" }, approval.detail.text) : null,
++    approval.reason ? (0, import_react30.createElement)("div", { className: "bt-mw-reason" }, approval.reason) : null,
++    approval.detail?.code ? (0, import_react30.createElement)("code", { className: "bt-mw-code", title: approval.detail.code }, approval.detail.code) : null,
++    approval.answerable ? (0, import_react30.createElement)(
+       "div",
+       { className: "bt-mw-actions" },
+-      (0, import_react29.createElement)("button", { type: "button", className: "bt-q-btn", disabled: busy, onClick: () => answer("reject") }, t("Reject")),
+-      (0, import_react29.createElement)("button", { type: "button", className: "bt-q-submit", disabled: busy, onClick: () => answer("allow") }, t("Allow once"))
+-    ) : (0, import_react29.createElement)(
++      (0, import_react30.createElement)("button", { type: "button", className: "bt-q-btn", disabled: busy, onClick: () => answer("reject") }, t("Reject")),
++      (0, import_react30.createElement)("button", { type: "button", className: "bt-q-submit", disabled: busy, onClick: () => answer("allow") }, t("Allow once"))
++    ) : (0, import_react30.createElement)(
+       "div",
+       { className: "bt-mw-actions" },
+-      (0, import_react29.createElement)("button", { type: "button", className: "bt-q-btn", onClick: () => actions.openSession(bot.id) }, t("Open {name}'s chat", { name: bot.name }))
++      (0, import_react30.createElement)("button", { type: "button", className: "bt-q-btn", onClick: () => actions.openSession(bot.id) }, t("Open {name}'s chat", { name: bot.name }))
+     )
+   );
+ }
+ function MemberWork({ entry, bot, room: room2, roster, actions, now }) {
+   if (entry.state === "ask") {
+-    return (0, import_react29.createElement)(
++    return (0, import_react30.createElement)(
+       "div",
+       { className: "bt-mw-member" },
+-      (0, import_react29.createElement)("div", { className: "bt-mw-state bt-mw-ask" }, `${t("Waiting for your approval")}${since(now, entry.approvals[0].at)}`),
+-      entry.approvals.map((approval) => (0, import_react29.createElement)(ApprovalCard, { key: approval.id, approval, bot, actions }))
++      (0, import_react30.createElement)("div", { className: "bt-mw-state bt-mw-ask" }, `${t("Waiting for your approval")}${since(now, entry.approvals[0].at)}`),
++      entry.approvals.map((approval) => (0, import_react30.createElement)(ApprovalCard, { key: approval.id, approval, bot, actions }))
+     );
+   }
+   if (entry.state !== "work") return null;
+   const where = entry.doing.roomId === room2.id ? "" : entry.doing.roomId ? t("in {name}", { name: roster.roomsById[entry.doing.roomId]?.name ?? t("a group chat") }) : t("in its own chat");
+-  return (0, import_react29.createElement)(
++  return (0, import_react30.createElement)(
+     "div",
+     { className: "bt-mw-member" },
+-    (0, import_react29.createElement)("div", { className: "bt-mw-state" }, (0, import_react29.createElement)(Shimmer, null, `${workPhrase(entry.doing.tool)}…`), where ? ` ${where}` : "", since(now, entry.doing.since))
++    (0, import_react30.createElement)("div", { className: "bt-mw-state" }, (0, import_react30.createElement)(Shimmer, null, `${workPhrase(entry.doing.tool)}…`), where ? ` ${where}` : "", since(now, entry.doing.since))
+   );
+ }
+ function useMemberWork(room2, useWork) {
+@@ -10867,7 +10974,7 @@ body[data-ds-dark-theme] .bt-mw-ask{color:#f0b84a}
+ `;
+ 
+ // src/client/details-drawer.js
+-var import_react30 = require("react");
++var import_react31 = require("react");
+ function transcriptOf(list, id, name, hiddenTurns = []) {
+   const outline = list.projectionsBySession?.[id]?.values?.turnOutline ?? list.byId[id]?.projectionValues?.turnOutline;
+   if (!Array.isArray(outline)) return "";
+@@ -10892,10 +10999,10 @@ var EMPTY_TABS = { ids: [], active: null };
+ var PERMISSION_LABELS = { "read-only": "Read only", "workspace-write": "Workspace", "danger-full-access": "Full access" };
+ var DANGER = /* @__PURE__ */ new Set(["danger-full-access"]);
+ function PermissionRow({ bot, roster, actions, run }) {
+-  const [pending, setPending] = (0, import_react30.useState)(null);
++  const [pending, setPending] = (0, import_react31.useState)(null);
+   const catalog = roster.permissions;
+   const saved = bot.permission ?? catalog?.defaultPreset;
+-  (0, import_react30.useEffect)(() => {
++  (0, import_react31.useEffect)(() => {
+     if (pending === saved) setPending(null);
+   }, [pending, saved]);
+   if (!catalog?.options?.length) return null;
+@@ -10905,14 +11012,14 @@ function PermissionRow({ bot, roster, actions, run }) {
+     setPending(value);
+     void run(actions.updateBot(bot.id, { permission: value })).catch(() => setPending(null));
+   };
+-  return (0, import_react30.createElement)(
++  return (0, import_react31.createElement)(
+     "div",
+     { className: "bt-drawer-permission" },
+-    (0, import_react30.createElement)("div", { className: "bt-section-title" }, t("Permissions")),
+-    (0, import_react30.createElement)(
++    (0, import_react31.createElement)("div", { className: "bt-section-title" }, t("Permissions")),
++    (0, import_react31.createElement)(
+       Segmented,
+       { label: t("Permissions"), value: current },
+-      catalog.options.map((option) => (0, import_react30.createElement)("button", {
++      catalog.options.map((option) => (0, import_react31.createElement)("button", {
+         key: option.value,
+         type: "button",
+         "aria-pressed": option.value === current,
+@@ -10926,42 +11033,42 @@ function PermissionRow({ bot, roster, actions, run }) {
+ function BrowserCards({ bot, sessionId, roster, actions, useBrowserTabs, useBrowserPages }) {
+   const state = useBrowserTabs((map) => map[bot.id] ?? EMPTY_TABS);
+   const pages = useBrowserPages((map) => map);
+-  (0, import_react30.useEffect)(() => {
++  (0, import_react31.useEffect)(() => {
+     actions.browserEnsure?.(bot.id);
+   }, [bot.id]);
+   if (roster.browser !== true || !actions.browserShow) {
+-    return (0, import_react30.createElement)("div", { className: "bt-muted" }, t("The browser is in the DSH Desktop app."));
++    return (0, import_react31.createElement)("div", { className: "bt-muted" }, t("The browser is in the DSH Desktop app."));
+   }
+   if (state.ids.length === 0) {
+-    return (0, import_react30.createElement)(
++    return (0, import_react31.createElement)(
+       "div",
+       { className: "bt-browser-empty-mark" },
+-      (0, import_react30.createElement)(BotMark, { bot, size: 40, state: "idle", live: true }),
+-      (0, import_react30.createElement)("div", { className: "bt-browser-empty-title" }, t("{name}'s browser", { name: bot.name })),
+-      (0, import_react30.createElement)("div", { className: "bt-muted" }, t("Open a page here and {name} can read it with you. Logins and cookies stay with {name}; other Bots never see them.", { name: bot.name })),
+-      (0, import_react30.createElement)("button", { type: "button", className: "bt-browser-retry", onClick: () => actions.openBrowser(sessionId) }, t("Open browser"))
++      (0, import_react31.createElement)(BotMark, { bot, size: 40, state: "idle", live: true }),
++      (0, import_react31.createElement)("div", { className: "bt-browser-empty-title" }, t("{name}'s browser", { name: bot.name })),
++      (0, import_react31.createElement)("div", { className: "bt-muted" }, t("Open a page here and {name} can read it with you. Logins and cookies stay with {name}; other Bots never see them.", { name: bot.name })),
++      (0, import_react31.createElement)("button", { type: "button", className: "bt-browser-retry", onClick: () => actions.openBrowser(sessionId) }, t("Open browser"))
+     );
+   }
+-  return (0, import_react30.createElement)(
++  return (0, import_react31.createElement)(
+     "div",
+     { className: "bt-bcards" },
+     state.ids.map((tabId, index) => {
+       const page = pages[tabId] ?? {};
+       const label = page.title || shortUrl(page.url) || t("New tab");
+-      return (0, import_react30.createElement)(
++      return (0, import_react31.createElement)(
+         "div",
+         { key: tabId, className: "bt-bcard", "data-active": state.active === tabId || void 0, style: { animationDelay: `${index * 30}ms` } },
+-        (0, import_react30.createElement)(
++        (0, import_react31.createElement)(
+           "button",
+           { type: "button", className: "bt-bcard-shot", "aria-label": t("Open {title}", { title: label }), title: page.url, onClick: () => actions.browserPick(sessionId, tabId) },
+-          page.excerpt ? (0, import_react30.createElement)(
++          page.excerpt ? (0, import_react31.createElement)(
+             "span",
+             { className: "bt-bcard-preview" },
+-            (0, import_react30.createElement)("span", { className: "bt-bcard-ptitle" }, label),
+-            (0, import_react30.createElement)("span", { className: "bt-bcard-excerpt" }, page.excerpt)
+-          ) : (0, import_react30.createElement)("span", { className: "bt-bcard-blank" }, (0, import_react30.createElement)(GlobeIcon), (0, import_react30.createElement)("span", null, label))
++            (0, import_react31.createElement)("span", { className: "bt-bcard-ptitle" }, label),
++            (0, import_react31.createElement)("span", { className: "bt-bcard-excerpt" }, page.excerpt)
++          ) : (0, import_react31.createElement)("span", { className: "bt-bcard-blank" }, (0, import_react31.createElement)(GlobeIcon), (0, import_react31.createElement)("span", null, label))
+         ),
+-        (0, import_react30.createElement)("button", {
++        (0, import_react31.createElement)("button", {
+           type: "button",
+           className: "bt-bcard-x",
+           "aria-label": t("Close tab"),
+@@ -10970,71 +11077,71 @@ function BrowserCards({ bot, sessionId, roster, actions, useBrowserTabs, useBrow
+             void actions.browserCloseTab(bot.id, tabId);
+           }
+         }, "×"),
+-        (0, import_react30.createElement)(
++        (0, import_react31.createElement)(
+           "div",
+           { className: "bt-bcard-row" },
+-          (0, import_react30.createElement)(Favicon, { src: page.favicon, className: "bt-bcard-fav" }),
+-          (0, import_react30.createElement)("span", { className: "bt-bcard-title" }, label),
+-          page.url ? (0, import_react30.createElement)("span", { className: "bt-bcard-host" }, hostOf(page.url)) : null
++          (0, import_react31.createElement)(Favicon, { src: page.favicon, className: "bt-bcard-fav" }),
++          (0, import_react31.createElement)("span", { className: "bt-bcard-title" }, label),
++          page.url ? (0, import_react31.createElement)("span", { className: "bt-bcard-host" }, hostOf(page.url)) : null
+         )
+       );
+     }),
+-    (0, import_react30.createElement)("button", { type: "button", className: "bt-bcard-new", style: { animationDelay: `${state.ids.length * 30}ms` }, onClick: () => actions.browserNewTab(sessionId) }, (0, import_react30.createElement)(PlusIcon), t("New tab"))
++    (0, import_react31.createElement)("button", { type: "button", className: "bt-bcard-new", style: { animationDelay: `${state.ids.length * 30}ms` }, onClick: () => actions.browserNewTab(sessionId) }, (0, import_react31.createElement)(PlusIcon), t("New tab"))
+   );
+ }
+ function About({ text, title = "About" }) {
+-  const [open, setOpen] = (0, import_react30.useState)(false);
++  const [open, setOpen] = (0, import_react31.useState)(false);
+   const long = text.split("\n").length > 5 || text.length > 240;
+-  const body = (0, import_react30.useRef)(null);
++  const body = (0, import_react31.useRef)(null);
+   useMorph(body, open);
+-  return (0, import_react30.createElement)(
++  return (0, import_react31.createElement)(
+     "div",
+     null,
+-    (0, import_react30.createElement)("div", { className: "bt-section-title" }, t(title)),
+-    (0, import_react30.createElement)("div", { ref: body, className: "bt-about", "data-open": open || void 0 }, text),
+-    long ? (0, import_react30.createElement)("button", { type: "button", className: "bt-more", onClick: () => setOpen((value) => !value) }, open ? t("Show less") : t("Show more")) : null
++    (0, import_react31.createElement)("div", { className: "bt-section-title" }, t(title)),
++    (0, import_react31.createElement)("div", { ref: body, className: "bt-about", "data-open": open || void 0 }, text),
++    long ? (0, import_react31.createElement)("button", { type: "button", className: "bt-more", onClick: () => setOpen((value) => !value) }, open ? t("Show less") : t("Show more")) : null
+   );
+ }
+ function GroupOverview({ room: room2, roster, actions, usage, useWork, openSettings }) {
+   const members = room2.members.map((id) => roster.byId[id]).filter(Boolean);
+   const { entries: entries2, now } = useMemberWork(room2, useWork);
+   return [
+-    room2.notice ? (0, import_react30.createElement)(About, { key: "notice", title: "Notice", text: room2.notice }) : (0, import_react30.createElement)("button", { key: "notice", type: "button", className: "bt-more", onClick: openSettings }, t("Add a notice in group settings")),
+-    (0, import_react30.createElement)(
++    room2.notice ? (0, import_react31.createElement)(About, { key: "notice", title: "Notice", text: room2.notice }) : (0, import_react31.createElement)("button", { key: "notice", type: "button", className: "bt-more", onClick: openSettings }, t("Add a notice in group settings")),
++    (0, import_react31.createElement)(
+       "div",
+       { key: "members" },
+-      (0, import_react30.createElement)("div", { className: "bt-section-title" }, t("Members · {count}", { count: members.length })),
+-      (0, import_react30.createElement)("div", { className: "bt-members", role: "list" }, members.map((member) => {
++      (0, import_react31.createElement)("div", { className: "bt-section-title" }, t("Members · {count}", { count: members.length })),
++      (0, import_react31.createElement)("div", { className: "bt-members", role: "list" }, members.map((member) => {
+         const entry = entries2.find((item) => item.id === member.id);
+-        return (0, import_react30.createElement)(
++        return (0, import_react31.createElement)(
+           "div",
+           { key: member.id, role: "listitem" },
+-          (0, import_react30.createElement)(
++          (0, import_react31.createElement)(
+             "div",
+             { className: "bt-member" },
+-            (0, import_react30.createElement)(
++            (0, import_react31.createElement)(
+               "button",
+               { type: "button", className: "bt-member-name", title: t("Open {name}'s chat", { name: member.name }), onClick: () => actions.openSession(member.id) },
+-              (0, import_react30.createElement)(BotAvatar, { bot: member, size: 26, main: isMainOf(roster, member.id), admin: room2.admin === member.id, live: false }),
+-              (0, import_react30.createElement)("span", null, member.name)
++              (0, import_react31.createElement)(BotAvatar, { bot: member, size: 26, main: isMainOf(roster, member.id), admin: room2.admin === member.id, live: false }),
++              (0, import_react31.createElement)("span", null, member.name)
+             ),
+-            room2.admin === member.id ? (0, import_react30.createElement)("span", { className: "bt-chip bt-chip-admin" }, t("Admin")) : null
++            room2.admin === member.id ? (0, import_react31.createElement)("span", { className: "bt-chip bt-chip-admin" }, t("Admin")) : null
+           ),
+-          entry ? (0, import_react30.createElement)(MemberWork, { entry, bot: member, room: room2, roster, actions, now }) : null
++          entry ? (0, import_react31.createElement)(MemberWork, { entry, bot: member, room: room2, roster, actions, now }) : null
+         );
+       }))
+     ),
+-    (0, import_react30.createElement)(
++    (0, import_react31.createElement)(
+       "div",
+       { key: "mode" },
+-      (0, import_react30.createElement)("div", { className: "bt-section-title" }, t("Who answers")),
+-      (0, import_react30.createElement)("div", { className: "bt-kv" }, (0, import_react30.createElement)("span", null, t(ROOM_MODES.find(([id]) => id === shownMode(room2, roster))?.[1] ?? "Everyone")))
++      (0, import_react31.createElement)("div", { className: "bt-section-title" }, t("Who answers")),
++      (0, import_react31.createElement)("div", { className: "bt-kv" }, (0, import_react31.createElement)("span", null, t(ROOM_MODES.find(([id]) => id === shownMode(room2, roster))?.[1] ?? "Everyone")))
+     ),
+-    usage ? (0, import_react30.createElement)(
++    usage ? (0, import_react31.createElement)(
+       "div",
+       { key: "usage" },
+-      (0, import_react30.createElement)("div", { className: "bt-section-title" }, t("Usage")),
+-      (0, import_react30.createElement)("div", { className: "bt-kv" }, (0, import_react30.createElement)("span", null, room2.name), (0, import_react30.createElement)("span", null, usage))
++      (0, import_react31.createElement)("div", { className: "bt-section-title" }, t("Usage")),
++      (0, import_react31.createElement)("div", { className: "bt-kv" }, (0, import_react31.createElement)("span", null, room2.name), (0, import_react31.createElement)("span", null, usage))
+     ) : null
+   ];
+ }
+@@ -11042,15 +11149,15 @@ function DetailsDrawer({ sessionId, startRenaming, startTab, hasStrip, roster, a
+   const owner = roster.byId[sessionId];
+   const part = owner ? currentPart(owner) : sessionId;
+   const isMainBot = isMainOf(roster, owner?.id);
+-  const [tab, setTab] = (0, import_react30.useState)("details");
++  const [tab, setTab] = (0, import_react31.useState)("details");
+   const room2 = roster.roomsById[sessionId];
+-  const [view, setView] = (0, import_react30.useState)(startTab === "settings" && (owner || room2) ? "settings" : "overview");
+-  const [editing, setEditing] = (0, import_react30.useState)(Boolean(startRenaming && (roster.byId[sessionId] || roster.roomsById[sessionId])));
+-  const [draftName, setDraftName] = (0, import_react30.useState)(roster.byId[sessionId]?.name ?? (roster.roomsById[sessionId]?.named ? roster.roomsById[sessionId].name : ""));
+-  const [copied, setCopied] = (0, import_react30.useState)(false);
+-  const [error, setError] = (0, import_react30.useState)("");
++  const [view, setView] = (0, import_react31.useState)(startTab === "settings" && (owner || room2) ? "settings" : "overview");
++  const [editing, setEditing] = (0, import_react31.useState)(Boolean(startRenaming && (roster.byId[sessionId] || roster.roomsById[sessionId])));
++  const [draftName, setDraftName] = (0, import_react31.useState)(roster.byId[sessionId]?.name ?? (roster.roomsById[sessionId]?.named ? roster.roomsById[sessionId].name : ""));
++  const [copied, setCopied] = (0, import_react31.useState)(false);
++  const [error, setError] = (0, import_react31.useState)("");
+   const glide = useGlide(tab);
+-  const last = (0, import_react30.useRef)({ view, tab, move: void 0 });
++  const last = (0, import_react31.useRef)({ view, tab, move: void 0 });
+   if (last.current.view !== view) last.current = { view, tab, move: view === "settings" ? "in" : "out" };
+   else if (last.current.tab !== tab) last.current = { view, tab, move: "tab" };
+   const move = last.current.move;
+@@ -11075,36 +11182,36 @@ function DetailsDrawer({ sessionId, startRenaming, startTab, hasStrip, roster, a
+       setTimeout(() => setCopied(false), 1600);
+     });
+   };
+-  const errorLine = error ? (0, import_react30.createElement)("div", { className: "bt-error", role: "alert", style: { padding: 0 } }, error) : null;
++  const errorLine = error ? (0, import_react31.createElement)("div", { className: "bt-error", role: "alert", style: { padding: 0 } }, error) : null;
+   if ((bot || room2) && view === "settings") {
+     return [
+-      (0, import_react30.createElement)(
++      (0, import_react31.createElement)(
+         "div",
+         { key: "head", className: "bt-subhead", "data-move": move },
+-        (0, import_react30.createElement)("button", { type: "button", className: "bt-icon-btn", "aria-label": t("Back to details"), onClick: () => setView("overview") }, (0, import_react30.createElement)(ChevronLeftIcon)),
+-        (0, import_react30.createElement)("span", { className: "bt-subhead-title" }, bot ? t("Settings") : t("Group settings")),
+-        hasStrip ? null : (0, import_react30.createElement)("button", { type: "button", className: "bt-icon-btn", "aria-label": t("Close details"), onClick: close }, (0, import_react30.createElement)(CloseIcon))
++        (0, import_react31.createElement)("button", { type: "button", className: "bt-icon-btn", "aria-label": t("Back to details"), onClick: () => setView("overview") }, (0, import_react31.createElement)(ChevronLeftIcon)),
++        (0, import_react31.createElement)("span", { className: "bt-subhead-title" }, bot ? t("Settings") : t("Group settings")),
++        hasStrip ? null : (0, import_react31.createElement)("button", { type: "button", className: "bt-icon-btn", "aria-label": t("Close details"), onClick: close }, (0, import_react31.createElement)(CloseIcon))
+       ),
+-      (0, import_react30.createElement)(
++      (0, import_react31.createElement)(
+         "div",
+         { key: "set-body", className: "bt-drawer-body bt-set-body", "data-move": move },
+         errorLine,
+-        bot ? (0, import_react30.createElement)(BotSettingsForm, { bot, roster, actions, run }) : (0, import_react30.createElement)(GroupSettingsForm, { room: room2, roster, actions, run, onDeleted: close })
++        bot ? (0, import_react31.createElement)(BotSettingsForm, { bot, roster, actions, run }) : (0, import_react31.createElement)(GroupSettingsForm, { room: room2, roster, actions, run, onDeleted: close })
+       )
+     ];
+   }
+-  const top = (0, import_react30.createElement)(
++  const top = (0, import_react31.createElement)(
+     "div",
+     { className: "bt-drawer-top", "data-move": side },
+-    bot || room2 ? (0, import_react30.createElement)("button", { type: "button", className: "bt-round", "aria-label": bot ? t("Edit Bot") : t("Group settings"), title: bot ? t("Edit Bot") : t("Group settings"), "data-info-row": "settings", onClick: () => setView("settings") }, (0, import_react30.createElement)(GearIcon)) : null,
+-    bot && roster.browser === true && actions.openBrowser ? (0, import_react30.createElement)("button", { type: "button", className: "bt-round", "aria-label": t("Open browser"), title: t("Open this Bot's browser"), onClick: () => actions.openBrowser(sessionId) }, (0, import_react30.createElement)(GlobeIcon)) : null,
+-    bot || room2 ? (0, import_react30.createElement)("button", { type: "button", className: "bt-round", "aria-label": copied ? t("Copied conversation") : t("Share conversation"), title: copied ? t("Copied") : t("Copy conversation as Markdown"), onClick: share }, copied ? (0, import_react30.createElement)("span", { key: "copied", className: "bt-pop-in" }, "✓") : (0, import_react30.createElement)(ShareIcon)) : null,
+-    hasStrip ? null : (0, import_react30.createElement)("button", { type: "button", className: "bt-round", "aria-label": t("Close details"), onClick: close }, (0, import_react30.createElement)(CloseIcon))
++    bot || room2 ? (0, import_react31.createElement)("button", { type: "button", className: "bt-round", "aria-label": bot ? t("Edit Bot") : t("Group settings"), title: bot ? t("Edit Bot") : t("Group settings"), "data-info-row": "settings", onClick: () => setView("settings") }, (0, import_react31.createElement)(GearIcon)) : null,
++    bot && roster.browser === true && actions.openBrowser ? (0, import_react31.createElement)("button", { type: "button", className: "bt-round", "aria-label": t("Open browser"), title: t("Open this Bot's browser"), onClick: () => actions.openBrowser(sessionId) }, (0, import_react31.createElement)(GlobeIcon)) : null,
++    bot || room2 ? (0, import_react31.createElement)("button", { type: "button", className: "bt-round", "aria-label": copied ? t("Copied conversation") : t("Share conversation"), title: copied ? t("Copied") : t("Copy conversation as Markdown"), onClick: share }, copied ? (0, import_react31.createElement)("span", { key: "copied", className: "bt-pop-in" }, "✓") : (0, import_react31.createElement)(ShareIcon)) : null,
++    hasStrip ? null : (0, import_react31.createElement)("button", { type: "button", className: "bt-round", "aria-label": t("Close details"), onClick: close }, (0, import_react31.createElement)(CloseIcon))
+   );
+   if (!bot && !room2) {
+     return [
+-      (0, import_react30.createElement)(import_react30.Fragment, { key: "top" }, top),
+-      (0, import_react30.createElement)("div", { key: "body", className: "bt-drawer-body" }, (0, import_react30.createElement)("div", { className: "bt-muted" }, t("This conversation is not part of your Bot team.")))
++      (0, import_react31.createElement)(import_react31.Fragment, { key: "top" }, top),
++      (0, import_react31.createElement)("div", { key: "body", className: "bt-drawer-body" }, (0, import_react31.createElement)("div", { className: "bt-muted" }, t("This conversation is not part of your Bot team.")))
+     ];
+   }
+   const current = bot?.name ?? room2.name;
+@@ -11118,12 +11225,12 @@ function DetailsDrawer({ sessionId, startRenaming, startTab, hasStrip, roster, a
+   const subtitle = bot ? bot.role : roomSubtitle(room2, roster);
+   const tabs = bot ? ["details", "browser"] : ["details"];
+   return [
+-    (0, import_react30.createElement)(import_react30.Fragment, { key: "top" }, top),
+-    (0, import_react30.createElement)(
++    (0, import_react31.createElement)(import_react31.Fragment, { key: "top" }, top),
++    (0, import_react31.createElement)(
+       "div",
+       { key: "id", className: "bt-drawer-id", "data-move": side },
+-      bot ? (0, import_react30.createElement)(BotAvatar, { bot, size: 64, state: botState(running, doing, roster.questions?.[part] !== void 0), main: isMainBot, badge: false, gaze: true, pokeable: true }) : (0, import_react30.createElement)(RoomAvatar, { room: room2, roster, size: 64 }),
+-      editing ? (0, import_react30.createElement)("input", {
++      bot ? (0, import_react31.createElement)(BotAvatar, { bot, size: 64, state: botState(running, doing, roster.questions?.[part] !== void 0), main: isMainBot, badge: false, gaze: true, pokeable: true }) : (0, import_react31.createElement)(RoomAvatar, { room: room2, roster, size: 64 }),
++      editing ? (0, import_react31.createElement)("input", {
+         className: "bt-drawer-name-input",
+         autoFocus: true,
+         value: draftName,
+@@ -11138,49 +11245,49 @@ function DetailsDrawer({ sessionId, startRenaming, startTab, hasStrip, roster, a
+             setEditing(false);
+           }
+         }
+-      }) : (0, import_react30.createElement)("button", { type: "button", className: "bt-drawer-name", "aria-label": t("Rename {name}", { name: current }), title: t("Rename"), onClick: () => {
++      }) : (0, import_react31.createElement)("button", { type: "button", className: "bt-drawer-name", "aria-label": t("Rename {name}", { name: current }), title: t("Rename"), onClick: () => {
+         setDraftName(room2 && !room2.named ? "" : current);
+         setEditing(true);
+       } }, current),
+-      subtitle ? (0, import_react30.createElement)("span", { className: "bt-drawer-role" }, subtitle) : null
++      subtitle ? (0, import_react31.createElement)("span", { className: "bt-drawer-role" }, subtitle) : null
+     ),
+-    (0, import_react30.createElement)(
++    (0, import_react31.createElement)(
+       "div",
+       { key: "tabs", ref: glide.box, className: "bt-tabs", role: "tablist", "data-move": side },
+-      (0, import_react30.createElement)("span", { ref: glide.thumb, className: "bt-thumb", "aria-hidden": true }),
+-      tabs.map((key) => (0, import_react30.createElement)("button", { key, type: "button", role: "tab", className: "bt-tab", "aria-selected": tab === key, onClick: () => setTab(key) }, t(TAB_LABELS[key])))
++      (0, import_react31.createElement)("span", { ref: glide.thumb, className: "bt-thumb", "aria-hidden": true }),
++      tabs.map((key) => (0, import_react31.createElement)("button", { key, type: "button", role: "tab", className: "bt-tab", "aria-selected": tab === key, onClick: () => setTab(key) }, t(TAB_LABELS[key])))
+     ),
+-    (0, import_react30.createElement)(
++    (0, import_react31.createElement)(
+       "div",
+       { key: `body:${tab}`, className: "bt-drawer-body", "data-move": move },
+       errorLine,
+-      room2 && tab === "details" ? (0, import_react30.createElement)(GroupOverview, { room: room2, roster, actions, usage, useWork, openSettings: () => setView("settings") }) : null,
++      room2 && tab === "details" ? (0, import_react31.createElement)(GroupOverview, { room: room2, roster, actions, usage, useWork, openSettings: () => setView("settings") }) : null,
+       bot && tab === "details" ? [
+-        (0, import_react30.createElement)(
++        (0, import_react31.createElement)(
+           "div",
+           { key: "model", className: "bt-drawer-model" },
+-          (0, import_react30.createElement)("div", { className: "bt-section-title" }, t("Model")),
+-          (0, import_react30.createElement)(ModelMenu, { bot, roster, actions, run, wide: true }),
+-          modelOf(bot, roster) ? null : (0, import_react30.createElement)("div", { className: "bt-note" }, t("Pick a model and {name} can start.", { name: bot.name }))
++          (0, import_react31.createElement)("div", { className: "bt-section-title" }, t("Model")),
++          (0, import_react31.createElement)(ModelMenu, { bot, roster, actions, run, wide: true }),
++          modelOf(bot, roster) ? null : (0, import_react31.createElement)("div", { className: "bt-note" }, t("Pick a model and {name} can start.", { name: bot.name }))
+         ),
+-        (0, import_react30.createElement)(PermissionRow, { key: "permission", bot, roster, actions, run }),
+-        bot.instructions ? (0, import_react30.createElement)(About, { key: "about", text: bot.instructions }) : (0, import_react30.createElement)("button", { key: "about", type: "button", className: "bt-more", onClick: () => setView("settings") }, t("Add instructions in Bot settings")),
+-        roster.memory === false ? null : (0, import_react30.createElement)(MemoryRow, { key: "memory", bot, actions }),
+-        usage ? (0, import_react30.createElement)(
++        (0, import_react31.createElement)(PermissionRow, { key: "permission", bot, roster, actions, run }),
++        bot.instructions ? (0, import_react31.createElement)(About, { key: "about", text: bot.instructions }) : (0, import_react31.createElement)("button", { key: "about", type: "button", className: "bt-more", onClick: () => setView("settings") }, t("Add instructions in Bot settings")),
++        roster.memory === false ? null : (0, import_react31.createElement)(MemoryRow, { key: "memory", bot, actions }),
++        usage ? (0, import_react31.createElement)(
+           "div",
+           { key: "usage" },
+-          (0, import_react30.createElement)("div", { className: "bt-section-title" }, t("Usage")),
+-          (0, import_react30.createElement)("div", { className: "bt-kv" }, (0, import_react30.createElement)("span", null, bot.name), (0, import_react30.createElement)("span", null, usage))
++          (0, import_react31.createElement)("div", { className: "bt-section-title" }, t("Usage")),
++          (0, import_react31.createElement)("div", { className: "bt-kv" }, (0, import_react31.createElement)("span", null, bot.name), (0, import_react31.createElement)("span", null, usage))
+         ) : null,
+-        (0, import_react30.createElement)(ScheduleSummary, { key: "routines", bot, actions })
++        (0, import_react31.createElement)(ScheduleSummary, { key: "routines", bot, actions })
+       ] : null,
+-      bot && tab === "browser" ? (0, import_react30.createElement)(BrowserCards, { bot, sessionId, roster, actions, useBrowserTabs, useBrowserPages }) : null
++      bot && tab === "browser" ? (0, import_react31.createElement)(BrowserCards, { bot, sessionId, roster, actions, useBrowserTabs, useBrowserPages }) : null
+     )
+   ];
+ }
+ 
+ // src/client/browser-pane.js
+-var import_react31 = require("react");
++var import_react32 = require("react");
+ var import_react_dom7 = require("react-dom");
+ var PANEL_LINGER_MS = 300;
+ var WIDTH_KEY = STORAGE.browserWidth;
+@@ -11195,10 +11302,10 @@ var EMPTY_TABS2 = { ids: [], active: null };
+ var SPRING_LEAD2 = springEasing(576, 39.4);
+ var SPRING_TRAIL2 = springEasing(144, 19.7);
+ var icon = (paths) => function BrowserIcon() {
+-  return (0, import_react31.createElement)(
++  return (0, import_react32.createElement)(
+     "svg",
+     { width: 16, height: 16, viewBox: "0 0 20 20", fill: "none", stroke: "currentColor", strokeWidth: 1.5, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": true },
+-    paths.map((d, index) => (0, import_react31.createElement)("path", { key: index, d }))
++    paths.map((d, index) => (0, import_react32.createElement)("path", { key: index, d }))
+   );
+ };
+ var GlobeIcon = icon(["M10 3a7 7 0 1 0 0 14 7 7 0 0 0 0-14z", "M3 10h14", "M10 3c2 2.2 2.9 4.5 2.9 7S12 14.8 10 17c-2-2.2-2.9-4.5-2.9-7S8 5.2 10 3z"]);
+@@ -11210,9 +11317,9 @@ var CloseIcon2 = icon(["M5.5 5.5l9 9M14.5 5.5l-9 9"]);
+ var PlusTabIcon = icon(["M10 5v10M5 10h10"]);
+ var LockIcon2 = icon(["M6.5 9V7a3.5 3.5 0 0 1 7 0v2", "M5.5 9h9v7h-9z"]);
+ function Favicon({ src, className }) {
+-  const [failed, setFailed] = (0, import_react31.useState)(null);
+-  if (!src || failed === src) return (0, import_react31.createElement)("span", { className: `${className} bt-ptab-globe` }, (0, import_react31.createElement)(GlobeIcon));
+-  return (0, import_react31.createElement)("img", { className, src, alt: "", "aria-hidden": true, onError: () => setFailed(src) });
++  const [failed, setFailed] = (0, import_react32.useState)(null);
++  if (!src || failed === src) return (0, import_react32.createElement)("span", { className: `${className} bt-ptab-globe` }, (0, import_react32.createElement)(GlobeIcon));
++  return (0, import_react32.createElement)("img", { className, src, alt: "", "aria-hidden": true, onError: () => setFailed(src) });
+ }
+ var savedWidth = () => {
+   try {
+@@ -11271,11 +11378,11 @@ var reducedMotion2 = () => typeof matchMedia === "function" && matchMedia("(pref
+ var tabLabel = (page) => page.title || shortAddress(page.url) || t("New tab");
+ function PanelStrip({ bot, subject, view, ids, active, reading, onView, actions, useBrowserPages }) {
+   const pages = useBrowserPages((map) => map);
+-  const wrap = (0, import_react31.useRef)(null);
+-  const ind = (0, import_react31.useRef)(null);
+-  const spot = (0, import_react31.useRef)(null);
+-  const under = (0, import_react31.useRef)(null);
+-  (0, import_react31.useLayoutEffect)(() => {
++  const wrap = (0, import_react32.useRef)(null);
++  const ind = (0, import_react32.useRef)(null);
++  const spot = (0, import_react32.useRef)(null);
++  const under = (0, import_react32.useRef)(null);
++  (0, import_react32.useLayoutEffect)(() => {
+     const box = wrap.current;
+     const capsule = ind.current;
+     if (!box || !capsule) return void 0;
+@@ -11304,7 +11411,7 @@ function PanelStrip({ bot, subject, view, ids, active, reading, onView, actions,
+       trail.cancel();
+     };
+   });
+-  (0, import_react31.useEffect)(() => {
++  (0, import_react32.useEffect)(() => {
+     const box = wrap.current;
+     if (!box) return void 0;
+     const observer = new ResizeObserver(() => {
+@@ -11318,13 +11425,13 @@ function PanelStrip({ bot, subject, view, ids, active, reading, onView, actions,
+     observer.observe(box);
+     return () => observer.disconnect();
+   }, []);
+-  return (0, import_react31.createElement)(
++  return (0, import_react32.createElement)(
+     "div",
+     { className: "bt-ptabs", role: "tablist", "aria-label": t("Panel tabs") },
+-    (0, import_react31.createElement)(
++    (0, import_react32.createElement)(
+       "div",
+       { className: "bt-ptabs-in", ref: wrap },
+-      (0, import_react31.createElement)(
++      (0, import_react32.createElement)(
+         "button",
+         {
+           type: "button",
+@@ -11334,13 +11441,13 @@ function PanelStrip({ bot, subject, view, ids, active, reading, onView, actions,
+           title: bot.name,
+           onClick: () => onView("details")
+         },
+-        (0, import_react31.createElement)(BotMark, { bot, size: 20, state: reading ? "searching" : "idle" }),
+-        view === "details" ? (0, import_react31.createElement)("span", { className: "bt-ptab-name" }, bot.name) : null
++        (0, import_react32.createElement)(BotMark, { bot, size: 20, state: reading ? "searching" : "idle" }),
++        view === "details" ? (0, import_react32.createElement)("span", { className: "bt-ptab-name" }, bot.name) : null
+       ),
+       ids.map((tabId) => {
+         const page = pages[tabId] ?? EMPTY_PAGE;
+         const on = view === "browser" && tabId === active;
+-        return (0, import_react31.createElement)(
++        return (0, import_react32.createElement)(
+           "button",
+           {
+             key: tabId,
+@@ -11361,9 +11468,9 @@ function PanelStrip({ bot, subject, view, ids, active, reading, onView, actions,
+               }
+             }
+           },
+-          (0, import_react31.createElement)(Favicon, { src: page.favicon, className: "bt-ptab-fav" }),
+-          (0, import_react31.createElement)("span", { className: "bt-ptab-title" }, tabLabel(page)),
+-          (0, import_react31.createElement)("span", {
++          (0, import_react32.createElement)(Favicon, { src: page.favicon, className: "bt-ptab-fav" }),
++          (0, import_react32.createElement)("span", { className: "bt-ptab-title" }, tabLabel(page)),
++          (0, import_react32.createElement)("span", {
+             className: "bt-ptab-x",
+             role: "button",
+             "aria-label": t("Close tab"),
+@@ -11375,20 +11482,20 @@ function PanelStrip({ bot, subject, view, ids, active, reading, onView, actions,
+           }, "×")
+         );
+       }),
+-      (0, import_react31.createElement)("span", { ref: ind, className: "bt-ptab-ind", "aria-hidden": true })
++      (0, import_react32.createElement)("span", { ref: ind, className: "bt-ptab-ind", "aria-hidden": true })
+     ),
+     // New tab and Close stay outside the scrolling tabs, so a narrow panel keeps both.
+-    (0, import_react31.createElement)("button", { type: "button", className: "bt-ptab-new", "aria-label": t("New tab"), title: t("New tab"), onClick: () => actions.browserNewTab(subject) }, (0, import_react31.createElement)(PlusTabIcon)),
+-    (0, import_react31.createElement)("button", { type: "button", className: "bt-icon-btn bt-ptab-close", "aria-label": t("Close panel"), title: t("Close panel"), onClick: () => actions.closePanel() }, (0, import_react31.createElement)(CloseIcon2))
++    (0, import_react32.createElement)("button", { type: "button", className: "bt-ptab-new", "aria-label": t("New tab"), title: t("New tab"), onClick: () => actions.browserNewTab(subject) }, (0, import_react32.createElement)(PlusTabIcon)),
++    (0, import_react32.createElement)("button", { type: "button", className: "bt-icon-btn bt-ptab-close", "aria-label": t("Close panel"), title: t("Close panel"), onClick: () => actions.closePanel() }, (0, import_react32.createElement)(CloseIcon2))
+   );
+ }
+ function BrowserView({ bot, tabId, leaving, landed, actions, useBrowserPages }) {
+   const page = useBrowserPages((pages) => pages[tabId ?? ""]) ?? EMPTY_PAGE;
+-  const frame = (0, import_react31.useRef)(null);
+-  const input = (0, import_react31.useRef)(null);
+-  const [draft, setDraft] = (0, import_react31.useState)(null);
++  const frame = (0, import_react32.useRef)(null);
++  const input = (0, import_react32.useRef)(null);
++  const [draft, setDraft] = (0, import_react32.useState)(null);
+   const showGuest = landed && !leaving && Boolean(page.url) && !page.error;
+-  (0, import_react31.useLayoutEffect)(() => {
++  (0, import_react32.useLayoutEffect)(() => {
+     const element = frame.current;
+     if (!element || leaving || !tabId) {
+       void actions.browserShow(null);
+@@ -11414,7 +11521,7 @@ function BrowserView({ bot, tabId, leaving, landed, actions, useBrowserPages })
+       window.removeEventListener("resize", schedule);
+     };
+   }, [tabId, showGuest, leaving]);
+-  (0, import_react31.useEffect)(() => {
++  (0, import_react32.useEffect)(() => {
+     setDraft(null);
+     if (landed && !page.url) input.current?.focus();
+   }, [tabId, landed]);
+@@ -11430,27 +11537,27 @@ function BrowserView({ bot, tabId, leaving, landed, actions, useBrowserPages })
+   };
+   const editing = draft !== null;
+   const secure = /^https:/i.test(page.url);
+-  return (0, import_react31.createElement)(
++  return (0, import_react32.createElement)(
+     "div",
+     { className: "bt-panel-view bt-panel-browser", "aria-label": t("{name}'s browser", { name: bot.name }) },
+-    (0, import_react31.createElement)(
++    (0, import_react32.createElement)(
+       "div",
+       { className: "bt-browser-bar" },
+-      (0, import_react31.createElement)("button", { type: "button", className: "bt-icon-btn", "aria-label": t("Back"), title: t("Back"), disabled: !page.canGoBack, onClick: () => actions.browserCommand(tabId, "back") }, (0, import_react31.createElement)(BackIcon)),
+-      (0, import_react31.createElement)("button", { type: "button", className: "bt-icon-btn", "aria-label": t("Forward"), title: t("Forward"), disabled: !page.canGoForward, onClick: () => actions.browserCommand(tabId, "forward") }, (0, import_react31.createElement)(ForwardIcon)),
+-      (0, import_react31.createElement)("button", {
++      (0, import_react32.createElement)("button", { type: "button", className: "bt-icon-btn", "aria-label": t("Back"), title: t("Back"), disabled: !page.canGoBack, onClick: () => actions.browserCommand(tabId, "back") }, (0, import_react32.createElement)(BackIcon)),
++      (0, import_react32.createElement)("button", { type: "button", className: "bt-icon-btn", "aria-label": t("Forward"), title: t("Forward"), disabled: !page.canGoForward, onClick: () => actions.browserCommand(tabId, "forward") }, (0, import_react32.createElement)(ForwardIcon)),
++      (0, import_react32.createElement)("button", {
+         type: "button",
+         className: "bt-icon-btn",
+         disabled: !page.url,
+         "aria-label": page.loading ? t("Stop") : t("Reload"),
+         title: page.loading ? t("Stop") : t("Reload"),
+         onClick: () => actions.browserCommand(tabId, page.loading ? "stop" : "reload")
+-      }, (0, import_react31.createElement)(page.loading ? StopIcon : ReloadIcon)),
+-      (0, import_react31.createElement)(
++      }, (0, import_react32.createElement)(page.loading ? StopIcon : ReloadIcon)),
++      (0, import_react32.createElement)(
+         "form",
+         { className: "bt-browser-address", onSubmit: go, "data-editing": editing || void 0 },
+-        (0, import_react31.createElement)("span", { className: "bt-browser-scheme", "aria-hidden": true }, (0, import_react31.createElement)(secure && !editing ? LockIcon2 : GlobeIcon)),
+-        (0, import_react31.createElement)("input", {
++        (0, import_react32.createElement)("span", { className: "bt-browser-scheme", "aria-hidden": true }, (0, import_react32.createElement)(secure && !editing ? LockIcon2 : GlobeIcon)),
++        (0, import_react32.createElement)("input", {
+           ref: input,
+           type: "text",
+           spellCheck: false,
+@@ -11474,25 +11581,25 @@ function BrowserView({ bot, tabId, leaving, landed, actions, useBrowserPages })
+           }
+         })
+       ),
+-      page.loading ? (0, import_react31.createElement)("span", { className: "bt-browser-progress", "aria-hidden": true }) : null
++      page.loading ? (0, import_react32.createElement)("span", { className: "bt-browser-progress", "aria-hidden": true }) : null
+     ),
+-    (0, import_react31.createElement)(
++    (0, import_react32.createElement)(
+       "div",
+       { ref: frame, className: "bt-browser-frame", "data-guest": showGuest || void 0 },
+-      page.error ? (0, import_react31.createElement)(
++      page.error ? (0, import_react32.createElement)(
+         "div",
+         { className: "bt-browser-empty" },
+-        (0, import_react31.createElement)("div", { className: "bt-browser-empty-title" }, t("This page didn’t load")),
+-        (0, import_react31.createElement)("div", { className: "bt-browser-empty-text" }, t(page.error)),
+-        page.url ? (0, import_react31.createElement)("button", { type: "button", className: "bt-browser-retry", onClick: () => {
++        (0, import_react32.createElement)("div", { className: "bt-browser-empty-title" }, t("This page didn’t load")),
++        (0, import_react32.createElement)("div", { className: "bt-browser-empty-text" }, t(page.error)),
++        page.url ? (0, import_react32.createElement)("button", { type: "button", className: "bt-browser-retry", onClick: () => {
+           void actions.browserNavigate(tabId, page.url);
+         } }, t("Try again")) : null
+-      ) : !page.url ? (0, import_react31.createElement)(
++      ) : !page.url ? (0, import_react32.createElement)(
+         "div",
+         { className: "bt-browser-empty" },
+-        (0, import_react31.createElement)(BotMark, { bot, size: 48, state: "idle", live: true }),
+-        (0, import_react31.createElement)("div", { className: "bt-browser-empty-title" }, t("{name}'s browser", { name: bot.name })),
+-        (0, import_react31.createElement)("div", { className: "bt-browser-empty-text" }, t("Open a page here and {name} can read it with you. Logins and cookies stay with {name}; other Bots never see them.", { name: bot.name }))
++        (0, import_react32.createElement)(BotMark, { bot, size: 48, state: "idle", live: true }),
++        (0, import_react32.createElement)("div", { className: "bt-browser-empty-title" }, t("{name}'s browser", { name: bot.name })),
++        (0, import_react32.createElement)("div", { className: "bt-browser-empty-text" }, t("Open a page here and {name} can read it with you. Logins and cookies stay with {name}; other Bots never see them.", { name: bot.name }))
+       ) : null
+     )
+   );
+@@ -11504,41 +11611,41 @@ function BotPanel({ pane, leaving, roster, actions, useSessions, useSessionStatu
+   const tabState = useBrowserTabs((map) => bot ? map[bot.id] ?? EMPTY_TABS2 : EMPTY_TABS2);
+   const active = tabState.active;
+   const page = useBrowserPages((pages) => (active ? pages[active] : null) ?? EMPTY_PAGE);
+-  const root = (0, import_react31.useRef)(null);
+-  const fly = (0, import_react31.useRef)(null);
+-  const [landed, setLanded] = (0, import_react31.useState)(false);
+-  const [settling, setSettling] = (0, import_react31.useState)(false);
+-  const [width, setWidth] = (0, import_react31.useState)(savedWidth);
+-  const [viewport, setViewport] = (0, import_react31.useState)(() => window.innerWidth);
+-  const [dragging, setDragging] = (0, import_react31.useState)(false);
+-  const [resizing, setResizing] = (0, import_react31.useState)(false);
++  const root = (0, import_react32.useRef)(null);
++  const fly = (0, import_react32.useRef)(null);
++  const [landed, setLanded] = (0, import_react32.useState)(false);
++  const [settling, setSettling] = (0, import_react32.useState)(false);
++  const [width, setWidth] = (0, import_react32.useState)(savedWidth);
++  const [viewport, setViewport] = (0, import_react32.useState)(() => window.innerWidth);
++  const [dragging, setDragging] = (0, import_react32.useState)(false);
++  const [resizing, setResizing] = (0, import_react32.useState)(false);
+   const instant = dragging || resizing;
+-  const [reading, setReading] = (0, import_react31.useState)(false);
++  const [reading, setReading] = (0, import_react32.useState)(false);
+   const panelWidth = fitWidth(width ?? (view === "browser" ? DEFAULT_WIDTH : DETAILS_WIDTH), widthRange(view, viewport));
+-  (0, import_react31.useLayoutEffect)(() => {
++  (0, import_react32.useLayoutEffect)(() => {
+     if (view === "browser" && width === null) setWidth(DEFAULT_WIDTH);
+   }, [view, width]);
+-  (0, import_react31.useLayoutEffect)(() => {
++  (0, import_react32.useLayoutEffect)(() => {
+     chatRoom.hold(instant);
+   }, [instant]);
+-  const [last, setLast] = (0, import_react31.useState)({ view, width: panelWidth });
++  const [last, setLast] = (0, import_react32.useState)({ view, width: panelWidth });
+   if (last.view !== view || last.width !== panelWidth) {
+     setLast({ view, width: panelWidth });
+     if (last.view !== view) setSettling(last.width !== panelWidth && !instant);
+   }
+-  const shownView = (0, import_react31.useRef)(view);
+-  (0, import_react31.useLayoutEffect)(() => {
++  const shownView = (0, import_react32.useRef)(view);
++  (0, import_react32.useLayoutEffect)(() => {
+     const switched = settling && shownView.current !== view;
+     shownView.current = view;
+     if (switched) chatRoom.hold(true);
+     chatRoom.set(leaving ? null : panelWidth);
+     if (switched) chatRoom.hold(false);
+   }, [view, panelWidth, leaving]);
+-  (0, import_react31.useEffect)(() => () => {
++  (0, import_react32.useEffect)(() => () => {
+     chatRoom.set(null);
+     chatRoom.hold(false);
+   }, []);
+-  (0, import_react31.useEffect)(() => {
++  (0, import_react32.useEffect)(() => {
+     let timer;
+     const onResize = () => {
+       setResizing(true);
+@@ -11552,28 +11659,28 @@ function BotPanel({ pane, leaving, roster, actions, useSessions, useSessionStatu
+       window.removeEventListener("resize", onResize);
+     };
+   }, []);
+-  (0, import_react31.useEffect)(() => {
++  (0, import_react32.useEffect)(() => {
+     if (!settling) return void 0;
+     const timer = setTimeout(() => setSettling(false), SPRING_SHAPE.duration + 40);
+     return () => clearTimeout(timer);
+   }, [settling, view]);
+-  (0, import_react31.useEffect)(() => {
++  (0, import_react32.useEffect)(() => {
+     const timer = setTimeout(() => setLanded(true), 360);
+     return () => clearTimeout(timer);
+   }, []);
+-  (0, import_react31.useEffect)(() => {
++  (0, import_react32.useEffect)(() => {
+     if (canBrowse) actions.browserEnsure(bot.id);
+   }, [bot?.id, canBrowse]);
+-  (0, import_react31.useEffect)(() => {
++  (0, import_react32.useEffect)(() => {
+     if (view === "browser" && (active === null || !tabState.ids.includes(active))) actions.setPanelView("details");
+   }, [view, active, tabState.ids.length]);
+-  (0, import_react31.useEffect)(() => {
++  (0, import_react32.useEffect)(() => {
+     if (view !== "browser" || leaving) void actions.browserShow?.(null);
+   }, [view, leaving]);
+-  (0, import_react31.useEffect)(() => () => {
++  (0, import_react32.useEffect)(() => () => {
+     void actions.browserShow?.(null);
+   }, []);
+-  (0, import_react31.useEffect)(() => {
++  (0, import_react32.useEffect)(() => {
+     if (!page.readAt || Date.now() - page.readAt > READ_FLASH_MS) return void 0;
+     setReading(true);
+     const timer = setTimeout(() => setReading(false), READ_FLASH_MS);
+@@ -11610,7 +11717,7 @@ function BotPanel({ pane, leaving, roster, actions, useSessions, useSessionStatu
+       return actions[name](...args);
+     };
+   }
+-  (0, import_react31.useLayoutEffect)(() => {
++  (0, import_react32.useLayoutEffect)(() => {
+     const move = fly.current;
+     if (!move) return;
+     fly.current = null;
+@@ -11693,7 +11800,7 @@ function BotPanel({ pane, leaving, roster, actions, useSessions, useSessionStatu
+     for (const name of ends) grip.addEventListener(name, onEnd);
+   };
+   const hasStrip = canBrowse && tabState.ids.length > 0;
+-  return (0, import_react31.createElement)(
++  return (0, import_react32.createElement)(
+     "aside",
+     {
+       ref: root,
+@@ -11710,15 +11817,15 @@ function BotPanel({ pane, leaving, roster, actions, useSessions, useSessionStatu
+         if (event.target === event.currentTarget) setLanded(true);
+       }
+     },
+-    leaving ? null : (0, import_react31.createElement)("div", { className: "bt-panel-grip", role: "separator", "aria-orientation": "vertical", "aria-label": t("Resize panel"), onPointerDown: startResize }),
++    leaving ? null : (0, import_react32.createElement)("div", { className: "bt-panel-grip", role: "separator", "aria-orientation": "vertical", "aria-label": t("Resize panel"), onPointerDown: startResize }),
+     // Over the whole window while dragging: the cursor stays a resize cursor and the
+     // pages underneath (the chat, the guest) see no pointer.
+-    dragging ? (0, import_react_dom7.createPortal)((0, import_react31.createElement)("div", { className: "bt-drag-shield", "aria-hidden": true }), document.body) : null,
+-    hasStrip ? (0, import_react31.createElement)(PanelStrip, { bot, subject: pane.id, view, ids: tabState.ids, active, reading, onView: switchView, actions: panelActions, useBrowserPages }) : null,
+-    view === "browser" && bot ? (0, import_react31.createElement)(BrowserView, { key: `browser:${active}`, bot, tabId: active, leaving, landed: landed && !settling, actions, useBrowserPages }) : (0, import_react31.createElement)(
++    dragging ? (0, import_react_dom7.createPortal)((0, import_react32.createElement)("div", { className: "bt-drag-shield", "aria-hidden": true }), document.body) : null,
++    hasStrip ? (0, import_react32.createElement)(PanelStrip, { bot, subject: pane.id, view, ids: tabState.ids, active, reading, onView: switchView, actions: panelActions, useBrowserPages }) : null,
++    view === "browser" && bot ? (0, import_react32.createElement)(BrowserView, { key: `browser:${active}`, bot, tabId: active, leaving, landed: landed && !settling, actions, useBrowserPages }) : (0, import_react32.createElement)(
+       "div",
+       { key: `details:${pane.id}:${pane.renaming ? "rename" : ""}:${pane.tab ?? ""}`, className: "bt-panel-view" },
+-      (0, import_react31.createElement)(DetailsDrawer, {
++      (0, import_react32.createElement)(DetailsDrawer, {
+         sessionId: pane.id,
+         startRenaming: pane.renaming,
+         startTab: pane.tab,
+@@ -11815,7 +11922,7 @@ var BROWSER_CSS = `
+ `;
+ 
+ // src/client/overlays.js
+-var import_react32 = require("react");
++var import_react33 = require("react");
+ var import_react_dom8 = require("react-dom");
+ var DIALOG_EXIT_MS = 160;
+ var MENU_EXIT_MS3 = 120;
+@@ -11824,15 +11931,15 @@ function Overlays({ useRoster, useUi, useSessions, useSessionStatus, useActivity
+   const ui2 = useUi((value) => value);
+   useRegistry((value) => value);
+   const current = useSessions((list) => Object.values(list.byId).find((session) => (session?.retainedBy?.mainView ?? 0) > 0)?.id ?? null);
+-  const previous = (0, import_react32.useRef)(current);
+-  (0, import_react32.useEffect)(() => {
++  const previous = (0, import_react33.useRef)(current);
++  (0, import_react33.useEffect)(() => {
+     if (previous.current === current) return;
+     previous.current = current;
+     if (current) actions.followPanel?.(current);
+   }, [current]);
+   const open = ui2.details ? { id: ui2.details, view: ui2.view ?? "details", renaming: ui2.renaming, tab: ui2.tab } : null;
+-  const [kept, setKept] = (0, import_react32.useState)(open);
+-  (0, import_react32.useEffect)(() => {
++  const [kept, setKept] = (0, import_react33.useState)(open);
++  (0, import_react33.useEffect)(() => {
+     if (open) {
+       setKept(open);
+       return void 0;
+@@ -11844,17 +11951,17 @@ function Overlays({ useRoster, useUi, useSessions, useSessionStatus, useActivity
+   const [settings, settingsLeaving] = useLinger(ui2.settings, DIALOG_EXIT_MS);
+   const [memory, memoryLeaving] = useLinger(ui2.memory && roster.byId[ui2.memory] ? ui2.memory : null, DIALOG_EXIT_MS);
+   const [menu, menuLeaving] = useLinger(ui2.menu, MENU_EXIT_MS3);
+-  return (0, import_react32.createElement)(
+-    import_react32.Fragment,
++  return (0, import_react33.createElement)(
++    import_react33.Fragment,
+     null,
+-    pane ? (0, import_react_dom8.createPortal)((0, import_react32.createElement)(BotPanel, { pane, leaving: open === null, roster, actions, useSessions, useSessionStatus, useActivity, useWork, useBrowserTabs, useBrowserPages }), document.body) : null,
+-    ui2.newChat ? (0, import_react_dom8.createPortal)((0, import_react32.createElement)(NewChat, { key: ui2.newChat, mode: ui2.newChat, roster, actions }), document.body) : null,
+-    ui2.palette ? (0, import_react_dom8.createPortal)((0, import_react32.createElement)(CommandPalette, { key: ui2.palette.token, start: ui2.palette.query, token: ui2.palette.token, roster, actions, useSessions }), document.body) : null,
+-    ui2.exchange ? (0, import_react_dom8.createPortal)((0, import_react32.createElement)(ExchangeDialog, { pair: ui2.exchange, roster, actions }), document.body) : null,
+-    ui2.voice ? (0, import_react_dom8.createPortal)((0, import_react32.createElement)(VoiceMode, { key: ui2.voice, sessionId: ui2.voice, roster, actions, useSessions, useSessionStatus }), document.body) : null,
+-    menu ? (0, import_react_dom8.createPortal)((0, import_react32.createElement)(ContextMenu, { key: `${menu.kind ?? ""}:${menu.id}:${menu.x}:${menu.y}`, menu, roster, actions, leaving: menuLeaving }), document.body) : null,
+-    settings ? (0, import_react_dom8.createPortal)((0, import_react32.createElement)(SettingsDialog, { page: settings.page, id: settings.id, roster, actions, useUpdate, leaving: settingsLeaving }), document.body) : null,
+-    memory && roster.byId[memory] ? (0, import_react_dom8.createPortal)((0, import_react32.createElement)(MemoryDialog, { key: memory, bot: roster.byId[memory], actions, leaving: memoryLeaving }), document.body) : null
++    pane ? (0, import_react_dom8.createPortal)((0, import_react33.createElement)(BotPanel, { pane, leaving: open === null, roster, actions, useSessions, useSessionStatus, useActivity, useWork, useBrowserTabs, useBrowserPages }), document.body) : null,
++    ui2.newChat ? (0, import_react_dom8.createPortal)((0, import_react33.createElement)(NewChat, { key: ui2.newChat, mode: ui2.newChat, roster, actions }), document.body) : null,
++    ui2.palette ? (0, import_react_dom8.createPortal)((0, import_react33.createElement)(CommandPalette, { key: ui2.palette.token, start: ui2.palette.query, token: ui2.palette.token, roster, actions, useSessions }), document.body) : null,
++    ui2.exchange ? (0, import_react_dom8.createPortal)((0, import_react33.createElement)(ExchangeDialog, { pair: ui2.exchange, roster, actions }), document.body) : null,
++    ui2.voice ? (0, import_react_dom8.createPortal)((0, import_react33.createElement)(VoiceMode, { key: ui2.voice, sessionId: ui2.voice, roster, actions, useSessions, useSessionStatus }), document.body) : null,
++    menu ? (0, import_react_dom8.createPortal)((0, import_react33.createElement)(ContextMenu, { key: `${menu.kind ?? ""}:${menu.id}:${menu.x}:${menu.y}`, menu, roster, actions, leaving: menuLeaving }), document.body) : null,
++    settings ? (0, import_react_dom8.createPortal)((0, import_react33.createElement)(SettingsDialog, { page: settings.page, id: settings.id, roster, actions, useUpdate, leaving: settingsLeaving }), document.body) : null,
++    memory && roster.byId[memory] ? (0, import_react_dom8.createPortal)((0, import_react33.createElement)(MemoryDialog, { key: memory, bot: roster.byId[memory], actions, leaving: memoryLeaving }), document.body) : null
+   );
+ }
+ 
+@@ -12685,7 +12792,7 @@ function writeMode(mode, storage = globalThis.localStorage) {
+ }
+ 
+ // src/client/user-message.js
+-var import_react33 = require("react");
++var import_react34 = require("react");
+ var ui = __toESM(require("@deepseek-ai/dsh-client-ui-primitives"), 1);
+ var canDrawUserMessages = () => typeof ui.projectUserText === "function";
+ function contentParts(content) {
+@@ -12717,38 +12824,38 @@ function userTextParts(text, bots, referenceLabels = []) {
+   return parts;
+ }
+ function UserText({ text, bots, referenceLabels, skillNames, references, actions }) {
+-  return userTextParts(text, bots, referenceLabels).map((part, index) => part.bot ? (0, import_react33.createElement)(
++  return userTextParts(text, bots, referenceLabels).map((part, index) => part.bot ? (0, import_react34.createElement)(
+     "button",
+     { key: index, type: "button", className: "bt-umention", title: `@${part.bot.name}`, onClick: () => actions.openSession(part.bot.id) },
+-    (0, import_react33.createElement)(BotMark, { bot: part.bot, size: 16 }),
++    (0, import_react34.createElement)(BotMark, { bot: part.bot, size: 16 }),
+     part.label
+-  ) : (0, import_react33.createElement)(import_react33.Fragment, { key: index }, ui.projectUserText(part.text, referenceLabels, skillNames, "skill", references)));
++  ) : (0, import_react34.createElement)(import_react34.Fragment, { key: index }, ui.projectUserText(part.text, referenceLabels, skillNames, "skill", references)));
+ }
+ function Attachments({ attachments, renderMessageImages }) {
+   const compact2 = attachments.length > 1;
+-  return (0, import_react33.createElement)("div", { className: "bt-uattach" }, attachments.map((block, index) => {
++  return (0, import_react34.createElement)("div", { className: "bt-uattach" }, attachments.map((block, index) => {
+     if (block.type === "image") {
+-      return renderMessageImages ? (0, import_react33.createElement)(import_react33.Fragment, { key: index }, renderMessageImages({ images: [{ attachment: block.attachment }], align: "end", compact: compact2 })) : null;
++      return renderMessageImages ? (0, import_react34.createElement)(import_react34.Fragment, { key: index }, renderMessageImages({ images: [{ attachment: block.attachment }], align: "end", compact: compact2 })) : null;
+     }
+     const file = block.attachment;
+     const meta = [ui.fileExtension?.(file.name)?.toUpperCase().slice(0, 8), ui.fileSizeText?.(file.bytes)].filter(Boolean).join(" · ");
+-    return (0, import_react33.createElement)(
++    return (0, import_react34.createElement)(
+       "span",
+       { key: index, className: "bt-ufile", title: file.name },
+-      ui.FileTypeIcon ? (0, import_react33.createElement)(ui.FileTypeIcon, { path: file.name, className: "bt-ufile-icon" }) : null,
+-      (0, import_react33.createElement)("span", { className: "bt-ufile-text" }, (0, import_react33.createElement)("span", { className: "bt-ufile-name" }, file.name), meta ? (0, import_react33.createElement)("span", { className: "bt-ufile-meta" }, meta) : null)
++      ui.FileTypeIcon ? (0, import_react34.createElement)(ui.FileTypeIcon, { path: file.name, className: "bt-ufile-icon" }) : null,
++      (0, import_react34.createElement)("span", { className: "bt-ufile-text" }, (0, import_react34.createElement)("span", { className: "bt-ufile-name" }, file.name), meta ? (0, import_react34.createElement)("span", { className: "bt-ufile-meta" }, meta) : null)
+     );
+   }));
+ }
+ function CopyButton({ text }) {
+-  const [copied, setCopied] = (0, import_react33.useState)(false);
++  const [copied, setCopied] = (0, import_react34.useState)(false);
+   const copy2 = () => {
+     void navigator.clipboard?.writeText(text).then(() => {
+       setCopied(true);
+       setTimeout(() => setCopied(false), 1e3);
+     });
+   };
+-  return (0, import_react33.createElement)("button", { type: "button", className: "bt-tool", "aria-label": copied ? t("Copied") : t("Copy"), title: copied ? t("Copied") : t("Copy"), onClick: copy2 }, copied ? (0, import_react33.createElement)(CheckIcon) : (0, import_react33.createElement)(CopyIcon));
++  return (0, import_react34.createElement)("button", { type: "button", className: "bt-tool", "aria-label": copied ? t("Copied") : t("Copy"), title: copied ? t("Copied") : t("Copy"), onClick: copy2 }, copied ? (0, import_react34.createElement)(CheckIcon) : (0, import_react34.createElement)(CopyIcon));
+ }
+ var clock3 = (time) => typeof time === "number" ? new Date(time).toLocaleTimeString(dateLocale(), { hour: "numeric", minute: "2-digit" }) : void 0;
+ function UserMessageCell({ node, sessionId, useRoster, actions, renderMessageImages, openFile, openSkill }) {
+@@ -12758,22 +12865,22 @@ function UserMessageCell({ node, sessionId, useRoster, actions, renderMessageIma
+   const referenceLabels = data.referenceLabels ?? [];
+   const references = openFile && openSkill ? { openFile, openSkill } : void 0;
+   const steering = node.kind === "steering";
+-  return (0, import_react33.createElement)(
++  return (0, import_react34.createElement)(
+     "div",
+     { className: "bt-umsg", "data-steering": steering || void 0 },
+-    (0, import_react33.createElement)(
++    (0, import_react34.createElement)(
+       "div",
+       { className: "bt-ustack" },
+-      attachments.length > 0 ? (0, import_react33.createElement)(Attachments, { attachments, renderMessageImages }) : null,
+-      text !== "" || rest.length > 0 ? (0, import_react33.createElement)(
++      attachments.length > 0 ? (0, import_react34.createElement)(Attachments, { attachments, renderMessageImages }) : null,
++      text !== "" || rest.length > 0 ? (0, import_react34.createElement)(
+         "div",
+         { className: "bt-ubody", title: clock3(data.time) },
+-        (0, import_react33.createElement)(UserText, { text, bots: mentionableBots(roster, sessionId), referenceLabels, skillNames: data.skillNames ?? [], references, actions }),
+-        rest.map((block, index) => ui.JsonBlock ? (0, import_react33.createElement)(ui.JsonBlock, { key: index, label: t("Content"), payload: block }) : null)
++        (0, import_react34.createElement)(UserText, { text, bots: mentionableBots(roster, sessionId), referenceLabels, skillNames: data.skillNames ?? [], references, actions }),
++        rest.map((block, index) => ui.JsonBlock ? (0, import_react34.createElement)(ui.JsonBlock, { key: index, label: t("Content"), payload: block }) : null)
+       ) : null,
+-      referenceLabels.length > 0 ? (0, import_react33.createElement)("div", { className: "bt-urefs" }, t("Referenced {labels}", { labels: referenceLabels.join(t(", ")) })) : null
++      referenceLabels.length > 0 ? (0, import_react34.createElement)("div", { className: "bt-urefs" }, t("Referenced {labels}", { labels: referenceLabels.join(t(", ")) })) : null
+     ),
+-    text === "" ? null : (0, import_react33.createElement)("div", { className: "bt-utools" }, (0, import_react33.createElement)(CopyButton, { text }))
++    text === "" ? null : (0, import_react34.createElement)("div", { className: "bt-utools" }, (0, import_react34.createElement)(CopyButton, { text }))
+   );
+ }
+ var USER_MESSAGE_CSS = `
+diff --git a/ds-bot/dev/bench.sh b/ds-bot/dev/bench.sh
+index 258a764..7038b21 100755
+--- a/ds-bot/dev/bench.sh
++++ b/ds-bot/dev/bench.sh
+@@ -90,13 +90,18 @@ start() {
+   if ! alive web; then
+     log="$HOME_DIR/web.log"
+     rm -f "$log"
++    if [ -f "$DSH_HARNESS/node_modules/@deepseek-ai/dsh/lib/bin.js" ]; then
++      set -- node "$DSH_HARNESS/node_modules/@deepseek-ai/dsh/lib/bin.js"
++    else
++      set -- pnpm -s dsh --patch apps/web/tests/pin-browse-picker.overlay.yml
++    fi
+     (cd "$DSH_HARNESS" && DSH_HOME="$HOME_DIR" DEEPSEEK_BASE_URL="http://127.0.0.1:$MOCK_PORT/v1" DEEPSEEK_API_KEY=mock-key \
+-      setsid pnpm -s dsh --profile web --patch apps/web/tests/pin-browse-picker.overlay.yml --patch "$HOME_DIR/bench.patch.yml" \
++      setsid "$@" --profile web --patch "$HOME_DIR/bench.patch.yml" \
+       --no-open --port "$WEB_PORT" </dev/null >"$log" 2>&1 & echo $! >"$HOME_DIR/web.pid")
+     i=0
+     until grep -q "dsh web: http" "$log" 2>/dev/null; do
+       i=$((i + 1))
+-      if [ $i -gt 120 ] || ! alive web; then echo "dsh web did not start; see $log" >&2; tail -20 "$log" | grep -v 'token=' >&2; exit 1; fi
++      if [ $i -gt 120 ] || { [ $i -gt 5 ] && ! alive web; }; then echo "dsh web did not start; see $log" >&2; tail -20 "$log" | grep -v 'token=' >&2; exit 1; fi
+       sleep 1
+     done
+   fi
+diff --git a/ds-bot/dev/kelivo-sync-smoke.mjs b/ds-bot/dev/kelivo-sync-smoke.mjs
+new file mode 100644
+index 0000000..bb9d667
+--- /dev/null
++++ b/ds-bot/dev/kelivo-sync-smoke.mjs
+@@ -0,0 +1,115 @@
++// Run after bench.sh: a real DSH model request -> Go sync -> Kelivo model request.
++import assert from 'node:assert/strict'
++import { execFile, spawn } from 'node:child_process'
++import { randomUUID } from 'node:crypto'
++import { readFileSync } from 'node:fs'
++import { createServer } from 'node:net'
++import { dirname, join, resolve } from 'node:path'
++import { setTimeout as delay } from 'node:timers/promises'
++import { promisify } from 'node:util'
++
++const [name, port] = process.argv.slice(2)
++assert.match(name ?? '', /^[a-z0-9-]+$/)
++assert.match(port ?? '', /^\d+$/)
++const home = resolve(import.meta.dirname, '../..', `.dsh-test-${name}`)
++const base = `http://127.0.0.1:${port}`
++const loginUrl = readFileSync(join(home, 'web.log'), 'utf8').match(/http:\/\/127\.0\.0\.1:\d+\/\?token=\S+/)?.[0]
++assert.ok(loginUrl, 'bench login URL missing')
++const login = await fetch(loginUrl, { redirect: 'manual' })
++const cookie = login.headers.getSetCookie().map(value => value.split(';')[0]).join('; ')
++assert.ok(cookie, 'bench login failed')
++async function api(endpoint, payload = {}) {
++  const response = await fetch(`${base}/api/bot`, { method: 'POST', headers: { cookie, 'content-type': 'application/json' }, body: JSON.stringify({ endpoint, payload }) })
++  const result = await response.json()
++  assert.equal(result.ok, true, `${endpoint}: ${result.error?.code}`)
++  return result.value
++}
++const logs = () => {
++  try { return readFileSync(join(home, 'mock.jsonl'), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line)) }
++  catch (error) { if (error.code === 'ENOENT') return []; throw error }
++}
++async function quiet() {
++  const deadline = Date.now() + 60_000
++  let previous = -1
++  let stable = Date.now()
++  while (Date.now() < deadline) {
++    const state = await api('state')
++    const count = logs().length
++    if (count !== previous || Object.keys(state.activity).length) { previous = count; stable = Date.now() }
++    else if (Date.now() - stable > 1000) return
++    await delay(100)
++  }
++  throw new Error('bench did not become idle')
++}
++await quiet()
++const reserve = createServer()
++await new Promise(resolve => reserve.listen(0, '127.0.0.1', resolve))
++const syncPort = reserve.address().port
++await new Promise(resolve => reserve.close(resolve))
++const binary = process.env.KELIVO_SYNC_SERVER_BINARY
++assert.ok(binary, 'KELIVO_SYNC_SERVER_BINARY is required')
++const db = join(home, 'bot', 'sync-smoke-server.sqlite')
++const server = spawn(binary, ['-db', db, '-addr', `127.0.0.1:${syncPort}`], { stdio: 'ignore' })
++const url = `http://127.0.0.1:${syncPort}`
++const exec = promisify(execFile)
++try {
++  const deadline = Date.now() + 30_000
++  for (;;) {
++    try { if ((await fetch(`${url}/health`)).ok) break } catch {}
++    if (Date.now() > deadline) throw new Error('sync server did not start')
++    await delay(50)
++  }
++  const pairCode = async () => (await exec(binary, ['-db', db, 'pair-code'])).stdout.trim()
++  const deviceId = randomUUID()
++  const claim = await fetch(`${url}/v1/pair/claim`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: await pairCode(), deviceId, deviceName: 'Phone fixture', platform: 'test' }) }).then(r => r.json())
++  assert.ok(claim.deviceToken, 'phone fixture could not pair')
++  const id = randomUUID()
++  const userMarker = `PHONE_USER_${randomUUID()}`
++  const assistantMarker = `PHONE_ASSISTANT_${randomUUID()}`
++  const time = new Date().toISOString()
++  const records = [
++    { kind: 'conversation', id, updatedAt: Date.now() * 1000, originDevice: deviceId, deleted: false,
++      payload: { id, title: 'Phone context smoke', createdAt: time, updatedAt: time, messageIds: [], versionSelections: {}, selectedRevisions: {}, extras: {} } },
++    ...[['user', userMarker], ['assistant', assistantMarker]].map(([role, value], index) => {
++      const messageId = randomUUID()
++      return { kind: 'message', id: messageId, originDevice: deviceId, updatedAt: Date.now() * 1000, deleted: false,
++        payload: { id: messageId, conversationId: id, role, parts: [{ kind: 'text', payload: value }], content: '', timestamp: new Date(Date.now() + index).toISOString(), isStreaming: false, version: 0, groupId: messageId } }
++    }),
++  ]
++  const pushed = await fetch(`${url}/v1/changes`, { method: 'POST', headers: { authorization: `Bearer ${claim.deviceToken}`, 'content-type': 'application/json' },
++    body: JSON.stringify({ deviceId, changeId: randomUUID(), records }) })
++  assert.equal(pushed.status, 200, 'phone fixture push failed')
++  const count = logs().length
++  await api('sync-pair', { server: url, code: await pairCode(), localHttp: true })
++  const imported = await api('sync-import', { conversationId: id })
++  const botId = imported.bindings.find(link => link.conversationId === id).botId
++  const roster = await api('state')
++  const model = roster.models.find(entry => entry.ref.endsWith('/deepseek-flash'))?.ref
++  assert.ok(model, 'mock DeepSeek model missing')
++  await api('update-bot', { id: botId, model })
++  await quiet()
++  assert.equal(logs().length, count, 'sync or model selection unexpectedly ran a Bot')
++  console.log('ok: sync imports both roles without any model or tool execution')
++  for (const marker of [userMarker, assistantMarker]) {
++    const before = logs().length
++    await api('send', { sessionId: botId, text: `上下文里有 ${marker}` })
++    await quiet()
++    const calls = logs().slice(before)
++    assert.ok(calls.some(call => call.out?.some(block => block.text === `上下文里有「${marker}」。`)), 'actual model request lost synced history')
++  }
++  await api('sync-run')
++  console.log('ok: actual DSH model requests contain the phone user and assistant history')
++  const flutter = process.env.FLUTTER_BIN
++  assert.ok(flutter, 'FLUTTER_BIN is required for the reverse model-request check')
++  const kelivo = process.env.KELIVO_REPO ?? resolve(dirname(home), '../kelivo')
++  const check = await exec(flutter, ['test', 'test/core/services/sync/kelivo_dsh_model_request_test.dart', '--no-pub', '--reporter', 'expanded'], {
++    cwd: kelivo, timeout: 120_000, maxBuffer: 1024 * 1024,
++    env: { ...process.env, KELIVO_DSH_SYNC_URL: url, KELIVO_DSH_PAIR_CODE: await pairCode(),
++      KELIVO_DSH_CONVERSATION: id, KELIVO_DSH_USER_MARKER: userMarker, KELIVO_DSH_ASSISTANT_MARKER: assistantMarker },
++  })
++  assert.ok(check.stdout.includes('All tests passed!'), 'Kelivo reverse check did not pass')
++  console.log('ok: actual Kelivo model request contains the synced DSH replies; both sides can continue')
++} finally {
++  server.kill()
++  await new Promise(resolve => server.once('exit', resolve))
++}
+diff --git a/ds-bot/index.js b/ds-bot/index.js
+index df6b83a..24f8ce6 100644
+--- a/ds-bot/index.js
++++ b/ds-bot/index.js
+@@ -29,6 +29,7 @@ import * as usage from './src/host/usage.js'
+ import * as update from './src/host/update.js'
+ import * as dshUpdate from './src/host/dsh-update.js'
+ import * as channel from './src/host/channel.js'
++import * as kelivoSync from './src/host/kelivo-sync.js'
+ 
+ export { COLORS } from './src/host/constants.js'
+ 
+@@ -39,7 +40,7 @@ export const inject = ['llm', 'tools', 'systemPrompt', 'sessionController', 'ses
+ // the functions other modules call; they call them through `rt` at run time, never during
+ // install. Listeners run and tools are listed in registration order, so this order holds:
+ // usage meters model requests after every listener that rewrites them.
+-const MODULES = [diagnostics, store, models, permissions, turns, delivery, roster, agents, prompt, timeContext, tools, chatIndex, groups, approvals, memory, parts, images, secrets, connectors, capabilities, schedules, browser, usage, update, dshUpdate, channel]
++const MODULES = [diagnostics, store, models, permissions, turns, delivery, roster, agents, prompt, timeContext, tools, chatIndex, groups, approvals, memory, parts, images, secrets, connectors, capabilities, schedules, browser, usage, update, dshUpdate, kelivoSync, channel]
+ 
+ export function apply(ctx, config = {}) {
+   createRuntime(ctx, config)
+diff --git a/ds-bot/src/client/i18n.js b/ds-bot/src/client/i18n.js
+index 4b1afc3..be2cac5 100644
+--- a/ds-bot/src/client/i18n.js
++++ b/ds-bot/src/client/i18n.js
+@@ -5,6 +5,21 @@
+ export const NAMESPACE = 'ds-bot'
+ 
+ const ZH = {
++  'Kelivo sync': 'Kelivo 同步',
++  'Share chat history and model context with Kelivo. Sync never starts a model or a tool.': '与 Kelivo 同步聊天记录和模型上下文。同步不会触发模型或工具。',
++  'Sync server': '同步服务器',
++  'Pairing code': '配对码',
++  'Allow local HTTP for testing': '允许本地 HTTP 测试',
++  'Sync now': '立即同步',
++  'Pair': '配对',
++  'Last synced': '最近同步',
++  'Share a Bot chat': '同步一个 Bot 的对话',
++  'Share chat': '同步此对话',
++  'Import a phone chat': '导入手机对话',
++  'Choose a conversation…': '选择对话…',
++  'Import as a new Bot': '导入为新 Bot',
++  'Deleted on phone; desktop history retained': '手机对话已删除，电脑历史保留',
++  'Use a configured Kelivo assistant to reply on your phone. Models, keys, tools and files stay on each device. DSH keeps its audit log when a phone message is edited or deleted.': '手机使用已配置的 Kelivo 助手继续回复。模型、密钥、工具和文件由各端独立配置。手机编辑或删除消息后，DSH 仍保留原始审计记录。',
+   // Shared
+   'Main Bot': '主 Bot',
+   Working: '工作中',
+diff --git a/ds-bot/src/client/kelivo-sync.js b/ds-bot/src/client/kelivo-sync.js
+new file mode 100644
+index 0000000..708b220
+--- /dev/null
++++ b/ds-bot/src/client/kelivo-sync.js
+@@ -0,0 +1,54 @@
++import { createElement as h, useEffect, useState } from 'react'
++import { call } from './api.js'
++import { t } from './i18n.js'
++
++export function KelivoSyncPage({ roster }) {
++  const [status, setStatus] = useState(null)
++  const [error, setError] = useState('')
++  const [busy, setBusy] = useState(false)
++  const [server, setServer] = useState('')
++  const [code, setCode] = useState('')
++  const [localHttp, setLocalHttp] = useState(false)
++  const [bot, setBot] = useState('')
++  const [conversation, setConversation] = useState('')
++  useEffect(() => {
++    const controller = new AbortController()
++    const refresh = () => { void call('sync-status', {}, controller.signal).then(value => {
++      setStatus(value); setServer(current => current || value.server)
++    }).catch(reason => { if (!controller.signal.aborted) setError(reason.message) }) }
++    refresh()
++    const timer = setInterval(refresh, 15_000)
++    return () => { clearInterval(timer); controller.abort() }
++  }, [])
++  async function run(endpoint, payload = {}) {
++    setBusy(true); setError('')
++    try { setStatus(await call(endpoint, payload)); if (endpoint === 'sync-pair') setCode('') }
++    catch (reason) { setError(reason.message) }
++    finally { setBusy(false) }
++  }
++  const input = (label, value, change, props = {}) => h('label', { className: 'bt-set-row' },
++    h('span', null, t(label)), h('input', { className: 'bt-input', value, onChange: e => change(e.target.value), ...props }))
++  const button = (label, endpoint, payload, disabled = false) => h('button', {
++    type: 'button', className: 'bt-soft bt-soft-sm', disabled: busy || disabled, onClick: () => { void run(endpoint, payload) },
++  }, t(label))
++  return h('section', { className: 'bt-set-section' },
++    h('p', null, t('Share chat history and model context with Kelivo. Sync never starts a model or a tool.')),
++    error || status?.lastError ? h('p', { className: 'bt-error', role: 'alert' }, error || status.lastError) : null,
++    h('div', { className: 'bt-set-card' },
++      input('Sync server', server, setServer, { type: 'url', placeholder: 'https://sync.example.com', disabled: status?.paired }),
++      !status?.paired ? input('Pairing code', code, setCode, { type: 'password', autoComplete: 'off' }) : null,
++      !status?.paired ? h('label', { className: 'bt-set-row' }, h('input', { type: 'checkbox', checked: localHttp, onChange: e => setLocalHttp(e.target.checked) }), t('Allow local HTTP for testing')) : null,
++      h('div', { className: 'bt-actions' }, status?.paired
++        ? [button('Sync now', 'sync-run', {}, false), button('Disconnect', 'sync-disconnect', {})]
++        : button('Pair', 'sync-pair', { server, code, localHttp }, !server || !code)),
++      status?.lastSuccess ? h('p', { role: 'status' }, `${t('Last synced')}: ${new Date(status.lastSuccess).toLocaleString()}`) : null),
++    status?.paired ? h('div', { className: 'bt-set-card' },
++      h('label', { className: 'bt-set-row' }, t('Share a Bot chat'), h('select', { className: 'bt-select', value: bot, onChange: e => setBot(e.target.value) },
++        h('option', { value: '' }, t('Choose a Bot…')), roster.bots.filter(b => !status.bindings.some(link => link.botId === b.id)).map(b => h('option', { key: b.id, value: b.id }, b.name)))),
++      button('Share chat', 'sync-share', { botId: bot }, !bot),
++      h('label', { className: 'bt-set-row' }, t('Import a phone chat'), h('select', { className: 'bt-select', value: conversation, onChange: e => setConversation(e.target.value) },
++        h('option', { value: '' }, t('Choose a conversation…')), status.conversations.map(c => h('option', { key: c.id, value: c.id }, c.title)))),
++      button('Import as a new Bot', 'sync-import', { conversationId: conversation }, !conversation),
++      status.bindings.map(link => h('p', { key: link.botId }, `${roster.bots.find(b => b.id === link.botId)?.name ?? 'Bot'} → ${link.title}${link.deleted ? ` (${t('Deleted on phone; desktop history retained')})` : ''}`))) : null,
++    h('p', { className: 'bt-set-hint' }, t('Use a configured Kelivo assistant to reply on your phone. Models, keys, tools and files stay on each device. DSH keeps its audit log when a phone message is edited or deleted.')))
++}
+diff --git a/ds-bot/src/client/settings.js b/ds-bot/src/client/settings.js
+index 096fa79..df75d52 100644
+--- a/ds-bot/src/client/settings.js
++++ b/ds-bot/src/client/settings.js
+@@ -17,14 +17,15 @@ import { CapabilitiesPage } from './capability-settings.js'
+ import { SchedulesPage } from './schedules.js'
+ import { FeedbackIcon, FeedbackPage } from './feedback.js'
+ import { AboutPage } from './about.js'
++import { KelivoSyncPage } from './kelivo-sync.js'
+ import { t } from './i18n.js'
+ 
+ const capitalize = word => word[0].toUpperCase() + word.slice(1)
+ 
+ // Settings dialog: a 198px page list beside the page. Bots and group chats each list
+ // their members, and one opens on its own settings form. Usage widens the dialog.
+-const SETTINGS_PAGES = [['general', 'General'], ['bots', 'Bots'], ['groups', 'Group chats'], ['connectors', 'Connectors'], ['capabilities', 'Capabilities'], ['schedules', 'Scheduled tasks'], ['usage', 'Usage'], ['secrets', 'Secrets'], ['feedback', 'Feedback'], ['about', 'About DS Bot']]
+-const PAGE_ICONS = { ...SETTINGS_ICONS, connectors: ConnectorIcon, capabilities: PlugIcon, schedules: ClockIcon, secrets: KeyIcon, feedback: FeedbackIcon, about: InfoIcon }
++const SETTINGS_PAGES = [['general', 'General'], ['bots', 'Bots'], ['groups', 'Group chats'], ['sync', 'Kelivo sync'], ['connectors', 'Connectors'], ['capabilities', 'Capabilities'], ['schedules', 'Scheduled tasks'], ['usage', 'Usage'], ['secrets', 'Secrets'], ['feedback', 'Feedback'], ['about', 'About DS Bot']]
++const PAGE_ICONS = { ...SETTINGS_ICONS, sync: ConnectorIcon, connectors: ConnectorIcon, capabilities: PlugIcon, schedules: ClockIcon, secrets: KeyIcon, feedback: FeedbackIcon, about: InfoIcon }
+ 
+ function SetSection({ title, children }) {
+   return h('section', { className: 'bt-set-section' }, h('h3', null, title), h('div', { className: 'bt-set-card' }, children))
+@@ -198,6 +199,7 @@ export function SettingsDialog({ page, id, roster, actions, useUpdate, leaving =
+         shown === 'usage' ? null : h('div', { key: pageKey, className: 'bt-settings-scroll bt-settings-page', 'data-move': last.current.move },
+           errorLine,
+           shown === 'general' ? h(GeneralPage, { roster, actions, run }) : null,
++          shown === 'sync' ? h(KelivoSyncPage, { roster }) : null,
+           bot ? h('div', { className: 'bt-settings-form' }, h(BotSettingsForm, { key: bot.id, bot, roster, actions, run })) : null,
+           shown === 'bots' && !bot ? h(BotsPage, { roster, actions, run }) : null,
+           room ? h('div', { className: 'bt-settings-form' }, h(GroupSettingsForm, { key: room.id, room, roster, actions, run })) : null,
+diff --git a/ds-bot/src/host/channel.js b/ds-bot/src/host/channel.js
+index 62b2b29..fd54138 100644
+--- a/ds-bot/src/host/channel.js
++++ b/ds-bot/src/host/channel.js
+@@ -106,6 +106,18 @@ export function install(rt) {
+       const readOnly = rt.readOnly()
+       if (readOnly !== undefined && !READS.has(endpoint)) return fail(readOnly, 'bot/read-only')
+       switch (endpoint) {
++        case 'sync-status':
++          return ok(rt.kelivoSync().status())
++        case 'sync-pair':
++          return ok(await rt.kelivoSync().pair(body))
++        case 'sync-run':
++          return ok(await rt.kelivoSync().run())
++        case 'sync-share':
++          return ok(await rt.kelivoSync().share(body.botId))
++        case 'sync-import':
++          return ok(await rt.kelivoSync().importConversation(body.conversationId))
++        case 'sync-disconnect':
++          return ok(await rt.kelivoSync().disconnect())
+         case 'state':
+           if (typeof body.locale === 'string' && /^[a-z]{2,3}(-[\w-]+)?$/i.test(body.locale)) uiLocale = body.locale
+           if (readOnly === undefined) await rt.bootstrap()
+diff --git a/ds-bot/src/host/kelivo-sync.js b/ds-bot/src/host/kelivo-sync.js
+new file mode 100644
+index 0000000..d192ed0
+--- /dev/null
++++ b/ds-bot/src/host/kelivo-sync.js
+@@ -0,0 +1,371 @@
++// Device-local sync credentials and receipts never enter Bot team state or prompts.
++import { randomUUID } from 'node:crypto'
++import { chmodSync, closeSync, existsSync, mkdirSync, openSync } from 'node:fs'
++import { isIP } from 'node:net'
++import { join } from 'node:path'
++import { DatabaseSync } from 'node:sqlite'
++
++const fail = code => Object.assign(new Error(`Kelivo sync: ${code}`), { code: 'bot/refused' })
++const keyOf = record => `${record.kind}:${record.id}`
++const newer = (a, b) => !b || a.updatedAt > b.updatedAt || (a.updatedAt === b.updatedAt && a.originDevice > b.originDevice)
++const textOf = content => (content ?? []).filter(block => block.type === 'text').map(block => block.text).join('\n')
++const tagOf = event => event.data?.kelivoSync ?? (event.data?.source ?? event.data?.message?.source)?.kelivoSync
++
++// DSH's public projection API preserves the recorded message's identity and role.
++export const syncEdit = {
++  type: 'ds-bot/sync-edit',
++  project(event, context) {
++    const { targetSeq, content } = event.data
++    if (!Number.isSafeInteger(targetSeq) || !context.nodes.includes(targetSeq) || !Array.isArray(content)
++      || content.some(block => block.type !== 'text' || typeof block.text !== 'string')) throw fail('invalid_edit')
++    const original = context.events[targetSeq - context.baseSeq]
++    const message = context.messages.get(targetSeq) ?? (original.type === 'user/message' ? original.data : original.data.message)
++    if (!message || !['user', 'assistant'].includes(message.role)) throw fail('invalid_edit_target')
++    return new Map([[targetSeq, { ...message, content }]])
++  },
++}
++
++export function syncUrl(value, localHttp = false) {
++  let url
++  try { url = new URL(value) } catch { throw fail('invalid_server_url') }
++  const host = url.hostname.replace(/^\[|\]$/g, '')
++  const octets = host.split('.').map(Number)
++  const local = host === 'localhost' || host === '::1' || (isIP(host) === 4 && (
++    octets[0] === 127 || octets[0] === 10 || (octets[0] === 192 && octets[1] === 168)
++    || (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31)))
++  if (url.username || url.password || url.search || url.hash || (url.protocol !== 'https:' && !(localHttp && local && url.protocol === 'http:'))) throw fail('https_required')
++  return url.href.replace(/\/$/, '')
++}
++
++function validate(record) {
++  if (!record || !['conversation', 'message'].includes(record.kind) || typeof record.id !== 'string'
++    || !record.id || record.id.length > 200 || !Number.isSafeInteger(record.updatedAt) || record.updatedAt <= 0
++    || typeof record.originDevice !== 'string' || !record.originDevice || typeof record.deleted !== 'boolean') throw fail('invalid_record')
++  if (record.deleted) return record
++  const p = record.payload
++  if (!p || p.id !== record.id || Buffer.byteLength(JSON.stringify(p)) > 1024 * 1024) throw fail('invalid_payload')
++  if (record.kind === 'conversation') {
++    if (typeof p.title !== 'string' || !Number.isFinite(Date.parse(p.createdAt)) || !Array.isArray(p.messageIds)) throw fail('invalid_conversation')
++  } else if (typeof p.conversationId !== 'string' || !['user', 'assistant'].includes(p.role)
++    || p.isStreaming !== false || !Number.isFinite(Date.parse(p.timestamp)) || !Array.isArray(p.parts)
++    || p.parts.some(part => typeof part.kind !== 'string' || typeof part.payload !== 'string')) throw fail('invalid_message')
++  return record
++}
++
++export function createSync(rt) {
++  if (typeof rt.ctx.sessions?.registerMessageProjection !== 'function') throw fail('requires_dsh_0.2.0_rc2')
++  const file = join(rt.home, 'kelivo-sync.sqlite')
++  mkdirSync(rt.home, { recursive: true })
++  closeSync(openSync(file, 'a', 0o600))
++  for (const path of [file, `${file}-wal`, `${file}-shm`]) {
++    try { chmodSync(path, 0o600) } catch (error) { if (error.code !== 'ENOENT') throw error }
++  }
++  const db = new DatabaseSync(file)
++  db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
++    CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY,value TEXT NOT NULL);
++    CREATE TABLE IF NOT EXISTS records (key TEXT PRIMARY KEY,json TEXT NOT NULL);
++    CREATE TABLE IF NOT EXISTS bindings (bot TEXT PRIMARY KEY,conversation TEXT UNIQUE NOT NULL,name TEXT NOT NULL);
++    CREATE TABLE IF NOT EXISTS exports (id TEXT PRIMARY KEY,conversation TEXT NOT NULL);
++    CREATE TABLE IF NOT EXISTS outbox (id INTEGER PRIMARY KEY CHECK(id=1),json TEXT NOT NULL);`)
++  const get = key => { const value = db.prepare('SELECT value FROM meta WHERE key=?').get(key)?.value; return value === undefined ? undefined : JSON.parse(value) }
++  const set = (key, value) => db.prepare('INSERT OR REPLACE INTO meta VALUES (?,?)').run(key, JSON.stringify(value))
++  const all = () => db.prepare('SELECT json FROM records').all().map(row => JSON.parse(row.json))
++  const recordOf = key => { const row = db.prepare('SELECT json FROM records WHERE key=?').get(key); return row && JSON.parse(row.json) }
++  const store = record => { validate(record); if (newer(record, recordOf(keyOf(record)))) db.prepare('INSERT OR REPLACE INTO records VALUES (?,?)').run(keyOf(record), JSON.stringify(record)) }
++  const bindings = () => db.prepare('SELECT * FROM bindings').all()
++  const device = get('device') ?? randomUUID()
++  set('device', device)
++  let operation
++  let closed = false
++  let lastError = null
++  let lastSuccess = null
++  const exclusive = task => {
++    if (closed) return Promise.reject(fail('stopped'))
++    if (operation) return Promise.reject(fail('busy'))
++    operation = Promise.resolve().then(task).catch(error => {
++      // Fetch and server error bodies may contain credentials. Only fixed codes leave here.
++      lastError = error?.code === 'bot/refused' ? error.message : 'Kelivo sync: operation_failed'
++      throw fail(lastError.replace(/^Kelivo sync: /, ''))
++    }).finally(() => { operation = undefined })
++    return operation
++  }
++  async function request(path, body, config = get('connection')) {
++    if (!config) throw fail('not_paired')
++    let response
++    try {
++      response = await fetch(`${config.url}${path}`, {
++        method: body === undefined ? 'GET' : 'POST', redirect: 'error', signal: AbortSignal.timeout(30_000),
++        headers: { 'content-type': 'application/json', 'X-Device-Id': device, ...(config.token ? { authorization: `Bearer ${config.token}` } : {}) },
++        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
++      })
++    } catch { throw fail('network_failed') }
++    if (!response.ok) { await response.body?.cancel(); throw fail(`http_${response.status}`) }
++    const chunks = []
++    let size = 0
++    for await (const chunk of response.body) {
++      size += chunk.length
++      if (size > 32 * 1024 * 1024) throw fail('response_too_large')
++      chunks.push(chunk)
++    }
++    try { return JSON.parse(Buffer.concat(chunks).toString('utf8')) } catch { throw fail('invalid_response') }
++  }
++  const status = () => ({
++    paired: Boolean(get('connection')?.token), enabled: get('enabled') === true,
++    server: get('connection')?.url ?? '', busy: Boolean(operation), lastError, lastSuccess,
++    bindings: bindings().map(binding => ({ botId: binding.bot, conversationId: binding.conversation,
++      title: recordOf(`conversation:${binding.conversation}`)?.payload?.title ?? binding.name,
++      deleted: recordOf(`conversation:${binding.conversation}`)?.deleted === true })),
++    conversations: all().filter(r => r.kind === 'conversation' && !r.deleted && !bindings().some(b => b.conversation === r.id))
++      .map(r => ({ id: r.id, title: r.payload.title })),
++  })
++  async function pull() {
++    for (;;) {
++      const cursor = get('cursor') ?? 0
++      const page = await request(`/v1/changes?cursor=${cursor}&limit=500`)
++      if (!Array.isArray(page.changes) || typeof page.hasMore !== 'boolean' || !Number.isSafeInteger(page.nextCursor)
++        || page.nextCursor < cursor || (page.hasMore && page.changes.length === 0)) throw fail('invalid_page')
++      let seq = cursor
++      for (const record of page.changes) {
++        validate(record)
++        if (!Number.isSafeInteger(record.serverSeq) || record.serverSeq <= seq) throw fail('invalid_sequence')
++        seq = record.serverSeq
++      }
++      if (page.nextCursor !== seq) throw fail('invalid_cursor')
++      db.exec('BEGIN')
++      try { for (const record of page.changes) store(record); set('cursor', seq); db.exec('COMMIT') }
++      catch (error) { db.exec('ROLLBACK'); throw error }
++      if (!page.hasMore) return
++    }
++  }
++  async function push() {
++    const queued = db.prepare('SELECT json FROM outbox WHERE id=1').get()
++    if (!queued) return
++    const body = JSON.parse(queued.json)
++    const result = await request('/v1/changes', body)
++    if (!Array.isArray(result.applied) || !Array.isArray(result.superseded)) throw fail('invalid_receipt')
++    const pending = new Map(body.records.map(r => [keyOf(r), r]))
++    const winners = []
++    for (const receipt of [...result.applied, ...result.superseded]) {
++      const key = keyOf(receipt)
++      const sent = pending.get(key)
++      if (!sent) throw fail('invalid_receipt')
++      if (receipt.winner) { validate(receipt.winner); if (keyOf(receipt.winner) !== key) throw fail('invalid_winner') }
++      else if (receipt.status !== 'applied' && receipt.status !== 'duplicate') throw fail('missing_winner')
++      winners.push(receipt.winner ?? sent)
++      pending.delete(key)
++    }
++    if (pending.size) throw fail('incomplete_receipt')
++    db.exec('BEGIN')
++    try { for (const winner of winners) store(winner); db.exec('DELETE FROM outbox'); db.exec('COMMIT') }
++    catch (error) { db.exec('ROLLBACK'); throw error }
++    // Push ACKs never move the pull cursor.
++  }
++  async function queue(records) {
++    let batch = []
++    let bytes = 0
++    for (const record of records) {
++      validate(record)
++      const size = Buffer.byteLength(JSON.stringify(record))
++      if (batch.length && (batch.length === 500 || bytes + size > 14 * 1024 * 1024)) { await send(); batch = []; bytes = 0 }
++      batch.push({ kind: record.kind, id: record.id, updatedAt: record.updatedAt, originDevice: device,
++        deleted: record.deleted, payload: record.payload }); bytes += size
++    }
++    if (batch.length) await send()
++    async function send() {
++      db.prepare('INSERT INTO outbox VALUES (1,?)').run(JSON.stringify({ deviceId: device, changeId: randomUUID(), records: batch }))
++      await push()
++    }
++  }
++  async function exportChats() {
++    for (const binding of bindings()) {
++      const conversation = recordOf(`conversation:${binding.conversation}`)
++      if (conversation?.deleted) continue
++      const bot = rt.botOf(binding.bot)
++      if (!bot) {
++        await queue([{ kind: 'conversation', id: binding.conversation, updatedAt: Math.max(Date.now() * 1000, (conversation?.updatedAt ?? 0) + 1), originDevice: device, deleted: true, payload: null }])
++        continue
++      }
++      if (bot.name !== binding.name && conversation) {
++        await queue([{ ...conversation, updatedAt: Math.max(Date.now() * 1000, conversation.updatedAt + 1), originDevice: device,
++          payload: { ...conversation.payload, title: bot.name } }])
++        db.prepare('UPDATE bindings SET name=? WHERE bot=?').run(bot.name, bot.id)
++      }
++      const records = []
++      const exported = []
++      const sessions = [...(bot.segments ?? []).map(s => s.sessionId), rt.chatOf(bot.id)]
++      for (const sessionId of sessions) {
++        const agent = await rt.resolveAgent(sessionId)
++        if (agent.status !== 'idle') throw fail('bot_is_running')
++        let keep = false
++        const hidden = new Set(rt.state.exchangeTurns[sessionId] ?? [])
++        for (const event of await eventsOf(agent)) {
++          const message = event.type === 'user/message' ? event.data : event.data?.message
++          if (message?.source?.kelivoSync || event.surfaceOp !== 'append') continue
++          const entry = rt.historyEntry(event, false)
++          if (entry && !entry.answer) keep = entry.keepAnswers
++          if (!entry || !entry.text || (entry.answer && (!keep || hidden.has(event.data.turn)))) continue
++          // Question cards and tools stay on DSH; only actual user/assistant messages cross.
++          if (!['user/message', 'assistant/message'].includes(event.type) || typeof message?.id !== 'string') continue
++          const id = `dsh:${sessionId}:${message.id}`
++          if (db.prepare('SELECT 1 FROM exports WHERE id=?').get(id)) continue
++          const previous = recordOf(`message:${id}`)
++          if (!previous) records.push({ kind: 'message', id, updatedAt: event.time * 1000, originDevice: device, deleted: false,
++            payload: { id, conversationId: binding.conversation, role: entry.answer ? 'assistant' : 'user', content: '',
++              parts: [{ kind: 'text', payload: entry.text }], timestamp: new Date(event.time).toISOString(), isStreaming: false,
++              version: 0, groupId: id, modelId: message.source?.model ?? null, providerId: null } })
++          exported.push(id)
++        }
++      }
++      // An export marker is only committed after its durable outbox has been acknowledged.
++      await queue(records)
++      for (const id of exported) db.prepare('INSERT OR IGNORE INTO exports VALUES (?,?)').run(id, binding.conversation)
++    }
++  }
++  async function eventsOf(agent) {
++    await rt.ctx.sessions.flush(agent.session)
++    const events = []
++    for await (const event of rt.eventsBackwards(agent.id, AbortSignal.timeout(30_000), Infinity)) events.push(event)
++    return events.sort((a, b) => a.seq - b.seq)
++  }
++  async function importChats() {
++    const records = all()
++    for (const binding of bindings()) {
++      if (!rt.botOf(binding.bot)) continue
++      const conversation = recordOf(`conversation:${binding.conversation}`)
++      if (conversation?.deleted) continue // A phone chat deletion does not destroy a Bot's identity or tools.
++      const agents = []
++      const bot = rt.botOf(binding.bot)
++      for (const id of [...(bot.segments ?? []).map(s => s.sessionId), rt.chatOf(bot.id)]) agents.push(await rt.resolveAgent(id))
++      if (agents.some(agent => agent.status !== 'idle')) throw fail('bot_is_running')
++      const current = agents.at(-1)
++      const byId = new Map()
++      const byGroup = new Map()
++      const native = new Map()
++      const index = (agent, event) => {
++        const entry = { agent, event }
++        const tag = tagOf(event)
++        if (tag) { byId.set(tag.id, entry); byGroup.set(tag.groupId ?? tag.id, entry) }
++        const message = event.type === 'user/message' ? event.data : event.data?.message
++        if (message?.id && !tag) native.set(`dsh:${agent.session.id}:${message.id}`, entry)
++      }
++      for (const agent of agents) for (const event of await eventsOf(agent)) index(agent, event)
++      const exported = new Set(db.prepare('SELECT id FROM exports WHERE conversation=?').all(binding.conversation).map(row => row.id))
++      const remote = records.filter(r => r.kind === 'message' && (r.payload?.conversationId === binding.conversation
++        || byId.has(r.id) || exported.has(r.id)))
++        .sort((a, b) => Date.parse(a.payload?.timestamp ?? '') - Date.parse(b.payload?.timestamp ?? '') || a.id.localeCompare(b.id))
++      await current.runMaintenance(async () => {
++        for (const record of remote) {
++          const p = record.payload
++          if (!record.deleted && p.groupId && conversation?.payload?.selectedRevisions?.[p.groupId]
++            && conversation.payload.selectedRevisions[p.groupId] !== record.id) continue
++          const group = p?.groupId ?? tagOf(byId.get(record.id)?.event ?? {})?.groupId ?? record.id
++          const found = (record.deleted ? byId.get(record.id) : byGroup.get(group)) ?? byId.get(record.id) ?? native.get(record.id)
++          if (record.deleted && byGroup.has(group) && tagOf(byGroup.get(group).event)?.id !== record.id) continue
++          const mark = found && tagOf(found.event)
++          if (mark?.id === record.id && !newer(record, mark)) continue
++          if (found && !mark && record.originDevice === device && record.updatedAt === found.event.time * 1000) continue
++          if (record.deleted && !found) continue
++          const session = found?.agent.session ?? current.session
++          const targetSeq = found?.event.data?.targetSeq ?? found?.event.seq
++          const canReplace = found && found.agent === current && session.surface.nodes.includes(targetSeq)
++          const tag = { id: record.id, groupId: group, conversationId: binding.conversation, updatedAt: record.updatedAt, originDevice: record.originDevice }
++          const content = [{ type: 'text', text: record.deleted ? '[Message deleted on Kelivo]' : p.parts.filter(part => part.kind === 'text').map(part => part.payload).join('\n') || p.content || '[Attachment: available on the source device]' }]
++          let event
++          if (canReplace) {
++            event = session.append('ds-bot/sync-edit', { targetSeq, content, kelivoSync: tag })
++          } else if (found) {
++            // shortcut: compacted history cannot be rewritten; append an explicit correction to the active part.
++            event = current.session.append('user/message', { id: randomUUID(), role: 'user', content: [{ type: 'text', text: record.deleted
++              ? `[Synced correction] Earlier message ${record.id} was deleted on Kelivo. Do not rely on it.`
++              : `[Synced correction] Earlier message ${record.id} now reads:\n${textOf(content)}` }],
++              source: { kind: 'plugin', plugin: 'ds-bot', form: 'notice', summary: 'Kelivo updated an earlier message', kelivoSync: tag } }, { surfaceOp: 'append' })
++          } else if (p.role === 'assistant') {
++            const time = Date.parse(p.timestamp)
++            event = session.append('assistant/message', { turn: 0, step: 0, stream: [
++              { type: 'chunk', time, chunk: { type: 'block-start', index: 0, blockType: 'text' } },
++              { type: 'text-chunks', time0: time, index: 0, dt: [0], texts: [textOf(content)] },
++              { type: 'chunk', time, chunk: { type: 'block-end', index: 0, block: content[0] } },
++              { type: 'chunk', time, chunk: { type: 'finish', reason: { kind: 'stop' } } },
++            ], message: { id: record.id, role: 'assistant', content,
++              source: { kind: 'model', provider: 'kelivo-sync', model: p.modelId ?? 'remote', kelivoSync: tag } } }, { surfaceOp: 'append' })
++          } else event = session.append('user/message', { id: record.id, role: 'user', content, source: { kind: 'user', kelivoSync: tag } }, { surfaceOp: 'append' })
++          index(current, event)
++          await rt.ctx.sessions.flush(current.session)
++        }
++      })
++    }
++  }
++  async function sync() {
++    await rt.load()
++    if (rt.readOnly() !== undefined) throw fail('read_only')
++    await push()
++    await pull()
++    await exportChats()
++    await pull()
++    await importChats()
++    lastError = null; lastSuccess = new Date().toISOString()
++    return status()
++  }
++  async function share(botId) {
++    await rt.load()
++    const bot = rt.botOf(botId)
++    if (!bot || bindings().some(b => b.bot === botId)) throw fail('invalid_bot')
++    const id = randomUUID()
++    const time = new Date(bot.createdAt).toISOString()
++    const record = { kind: 'conversation', id, originDevice: device, updatedAt: Date.now() * 1000, deleted: false,
++      payload: { id, title: bot.name, createdAt: time, updatedAt: time, messageIds: [], versionSelections: {}, selectedRevisions: {}, extras: {} } }
++    await queue([record])
++    db.prepare('INSERT INTO bindings VALUES (?,?,?)').run(botId, id, bot.name)
++    return sync()
++  }
++  async function importConversation(id) {
++    await sync()
++    const record = recordOf(`conversation:${id}`)
++    if (!record || record.deleted || bindings().some(b => b.conversation === id)) throw fail('invalid_conversation')
++    let name = 'Phone chat'
++    let suffix = 1
++    while (rt.findBot(name)) name = `Phone chat ${++suffix}`
++    const bot = await rt.createBot({ name, pickModel: true })
++    rt.dropKickoff(bot.id)
++    db.prepare('INSERT INTO bindings VALUES (?,?,?)').run(bot.id, id, bot.name)
++    await importChats()
++    return status()
++  }
++  return {
++    status,
++    run: () => exclusive(sync),
++    share: id => exclusive(() => share(id)),
++    importConversation: id => exclusive(() => importConversation(id)),
++    pair: body => exclusive(async () => {
++      const url = syncUrl(body.server, body.localHttp === true)
++      if (typeof body.code !== 'string' || !body.code.trim() || body.code.length > 200) throw fail('invalid_pair_code')
++      const paired = await request('/v1/pair/claim', { deviceId: device, deviceName: 'DS Bot', platform: 'dsh', code: body.code.trim() }, { url })
++      if (typeof paired.deviceToken !== 'string' || !paired.deviceToken || typeof paired.serverId !== 'string') throw fail('invalid_pair_response')
++      if (get('serverId') && get('serverId') !== paired.serverId) throw fail('different_server_requires_fresh_sync_database')
++      set('connection', { url, token: paired.deviceToken }); set('serverId', paired.serverId); set('enabled', true)
++      return sync()
++    }),
++    disconnect: () => exclusive(async () => { set('enabled', false); set('connection', null); return status() }),
++    close: async () => { closed = true; await operation?.catch(() => {}); db.close() },
++    enabled: () => get('enabled') === true,
++  }
++}
++
++export function install(rt) {
++  let service
++  let timer
++  rt.kelivoSync = () => (service ??= createSync(rt))
++  rt.ctx.effect(() => rt.ctx.sessions?.registerMessageProjection?.(syncEdit), 'ds-bot: Kelivo message edits')
++  rt.ctx.effect(() => {
++    if (existsSync(join(rt.home, 'kelivo-sync.sqlite'))) {
++      service = createSync(rt)
++      if (service.enabled()) void service.run().catch(() => {})
++    }
++    timer = setInterval(() => {
++      // Lazily open only after the user visits Sync; ordinary users get no extra files or work.
++      if (service?.enabled()) void service.run().catch(() => {})
++    }, 60_000)
++    timer.unref?.()
++    return async () => { clearInterval(timer); await service?.close() }
++  }, 'ds-bot: Kelivo sync')
++}
+diff --git a/ds-bot/test/install.test.js b/ds-bot/test/install.test.js
+index 247f0ed..7dbde1e 100644
+--- a/ds-bot/test/install.test.js
++++ b/ds-bot/test/install.test.js
+@@ -92,6 +92,8 @@ test('apply registers listeners, tools, and effects in a fixed order', (t) => {
+     'on llm/stream',
+     'effect ds-bot: update check',
+     'effect ds-bot: dsh update install',
++    'effect ds-bot: Kelivo message edits',
++    'effect ds-bot: Kelivo sync',
+     'effect ds-bot: api route',
+     'route POST /api/bot',
+     'effect ds-bot: load state',
+diff --git a/ds-bot/test/kelivo-sync.test.js b/ds-bot/test/kelivo-sync.test.js
+new file mode 100644
+index 0000000..b7febe9
+--- /dev/null
++++ b/ds-bot/test/kelivo-sync.test.js
+@@ -0,0 +1,129 @@
++import assert from 'node:assert/strict'
++import { execFile, spawn } from 'node:child_process'
++import { mkdtempSync, rmSync, statSync } from 'node:fs'
++import { createServer } from 'node:net'
++import { tmpdir } from 'node:os'
++import { join } from 'node:path'
++import { promisify } from 'node:util'
++import { setTimeout as delay } from 'node:timers/promises'
++import { test } from 'node:test'
++import { Session } from '@deepseek-ai/dsh-session'
++import { createUserMessage, createAssistantMessage } from '@deepseek-ai/dsh-llm'
++import { createSync, syncEdit, syncUrl } from '../src/host/kelivo-sync.js'
++import { historyEntry } from '../src/host/parts.js'
++
++const exec = promisify(execFile)
++const content = text => [{ type: 'text', text }]
++const text = message => message.content.map(block => block.text ?? '').join('')
++function assistant(session, value) {
++  return session.append('assistant/message', { turn: 1, step: 1, stream: [
++    { type: 'chunk', time: Date.now(), chunk: { type: 'block-end', index: 0, block: content(value)[0] } },
++    { type: 'chunk', time: Date.now(), chunk: { type: 'finish', reason: { kind: 'stop' } } },
++  ], message: createAssistantMessage({ content: content(value), source: { provider: 'mock', model: 'mock' } }) }, { surfaceOp: 'append' })
++}
++
++test('sync accepts HTTPS, permits only explicit local HTTP and refuses URL credentials', () => {
++  assert.equal(syncUrl('https://sync.example.com/'), 'https://sync.example.com')
++  for (const url of ['http://127.0.0.1', 'ftp://localhost', 'https://user:password@example.com', 'https://example.com?secret=x']) assert.throws(() => syncUrl(url))
++  for (const url of ['http://example.com', 'http://192.169.1.1', 'http://172.32.1.1']) assert.throws(() => syncUrl(url, true))
++  assert.equal(syncUrl('http://127.0.0.1:8787', true), 'http://127.0.0.1:8787')
++})
++
++test('a logged sync edit changes model context, preserves roles and replays after restart', () => {
++  const session = Session.create('projection-test', [], undefined, undefined, [syncEdit])
++  const original = assistant(session, 'old reply')
++  session.append('ds-bot/sync-edit', { targetSeq: original.seq, content: content('new reply') })
++  assert.deepEqual(session.deriveMessages().map(m => [m.role, text(m)]), [['assistant', 'new reply']])
++  assert.equal(session.deriveMessages()[0].id, original.data.message.id)
++  const restored = Session.create('projection-test', session.snapshotEvents(), undefined, undefined, [syncEdit])
++  assert.equal(text(restored.deriveMessages()[0]), 'new reply')
++  assert.throws(() => restored.append('ds-bot/sync-edit', { targetSeq: 999, content: content('bad') }))
++})
++
++test('real Go server: both roles cross devices, edits affect context and lost ACKs survive restart without waking a Bot',
++  { skip: !process.env.KELIVO_SYNC_SERVER_BINARY, timeout: 60_000 }, async t => {
++    const root = mkdtempSync(join(tmpdir(), '.dsh-test-sync-'))
++    const binary = process.env.KELIVO_SYNC_SERVER_BINARY
++    const listener = createServer()
++    await new Promise(resolve => listener.listen(0, '127.0.0.1', resolve))
++    const port = listener.address().port
++    await new Promise(resolve => listener.close(resolve))
++    const db = join(root, 'server.sqlite')
++    const server = spawn(binary, ['-db', db, '-addr', `127.0.0.1:${port}`], { stdio: 'ignore' })
++    const url = `http://127.0.0.1:${port}`
++    let bridge
++    t.after(async () => { await bridge?.close(); server.kill(); await new Promise(resolve => server.once('exit', resolve)); rmSync(root, { recursive: true, force: true }) })
++    const started = Date.now()
++    for (;;) {
++      try { if ((await fetch(`${url}/health`)).ok) break } catch {}
++      if (Date.now() - started > 30_000) throw new Error('test server did not start')
++      await delay(50)
++    }
++    async function pair() { return (await exec(binary, ['-db', db, 'pair-code'])).stdout.trim() }
++    const claim = await fetch(`${url}/v1/pair/claim`, { method: 'POST', headers: { 'content-type': 'application/json' },
++      body: JSON.stringify({ code: await pair(), deviceId: 'phone', deviceName: 'phone', platform: 'test' }) }).then(r => r.json())
++    async function phoneRequest(path, body) {
++      const response = await fetch(`${url}${path}`, { method: body ? 'POST' : 'GET', headers: { authorization: `Bearer ${claim.deviceToken}`, 'content-type': 'application/json' },
++        ...(body ? { body: JSON.stringify(body) } : {}) })
++      assert.equal(response.status, 200)
++      return response.json()
++    }
++    let session = Session.create('desktop-session', [], undefined, undefined, [syncEdit])
++    session.append('user/message', createUserMessage({ content: content('desktop question'), source: { kind: 'user' } }), { surfaceOp: 'append' })
++    assistant(session, 'desktop reply')
++    const bot = { id: 'desktop-session', name: 'Chief', createdAt: Date.now() }
++    let wakeups = 0
++    const agent = { id: bot.id, status: 'idle', get session() { return session }, runMaintenance: task => task(),
++      followup() { wakeups += 1 }, steer() { wakeups += 1 }, inject() { wakeups += 1 } }
++    const rt = {
++      home: join(root, 'bot'), state: { exchangeTurns: {} }, ctx: { sessions: { flush: async () => {}, registerMessageProjection() {} } },
++      load: async () => {}, readOnly: () => undefined, botOf: id => id === bot.id ? bot : undefined,
++      chatOf: id => id, resolveAgent: async () => agent, historyEntry,
++      async *eventsBackwards() { yield* [...session.snapshotEvents()].reverse() },
++    }
++    bridge = createSync(rt)
++    await bridge.pair({ server: url, localHttp: true, code: await pair() })
++    const shared = await bridge.share(bot.id)
++    const conversation = shared.bindings[0].conversationId
++    const exported = (await phoneRequest('/v1/changes?cursor=0')).changes.filter(r => r.kind === 'message')
++    assert.deepEqual(exported.map(r => [r.payload.role, r.payload.parts[0].payload]), [['user', 'desktop question'], ['assistant', 'desktop reply']])
++    assert.equal(session.deriveMessages().length, 2)
++    let change = 0
++    const message = (id, role, value, stamp = Date.now() * 1000) => ({ kind: 'message', id, originDevice: 'phone', updatedAt: stamp, deleted: false,
++      payload: { id, conversationId: conversation, role, parts: [{ kind: 'text', payload: value }], timestamp: new Date().toISOString(), content: '', isStreaming: false, version: 0, groupId: id } })
++    const send = records => phoneRequest('/v1/changes', { deviceId: 'phone', changeId: `phone-${++change}`, records: records.map(record => ({ ...record, serverSeq: 0 })) })
++    const question = message('phone-question', 'user', 'phone continuation')
++    const reply = message('phone-reply', 'assistant', 'phone answer')
++    await send([question, reply]); await bridge.run()
++    assert.deepEqual(session.deriveMessages().map(m => [m.role, text(m)]), [
++      ['user', 'desktop question'], ['assistant', 'desktop reply'], ['user', 'phone continuation'], ['assistant', 'phone answer'],
++    ])
++    const count = session.seq
++    await bridge.run(); assert.equal(session.seq, count)
++    const edited = message('phone-reply', 'assistant', 'corrected phone answer', reply.updatedAt + 10)
++    await send([edited]); await bridge.run()
++    assert.equal(text(session.deriveMessages().at(-1)), 'corrected phone answer')
++    await send([{ kind: 'message', id: question.id, originDevice: 'phone', updatedAt: question.updatedAt + 100, deleted: true, payload: null }]); await bridge.run()
++    assert.ok(!session.deriveMessages().some(m => text(m) === 'phone continuation'))
++    const desktopEdit = { ...exported[1], originDevice: 'phone', updatedAt: exported[1].updatedAt + 100,
++      payload: { ...exported[1].payload, parts: [{ kind: 'text', payload: 'edited desktop answer' }] } }
++    await send([desktopEdit]); await bridge.run()
++    assert.equal(text(session.deriveMessages()[1]), 'edited desktop answer')
++    session.append('user/message', createUserMessage({ content: content('persist despite lost ACK'), source: { kind: 'user' } }), { surfaceOp: 'append' })
++    const realFetch = globalThis.fetch
++    let lost = false
++    globalThis.fetch = async (...args) => {
++      const response = await realFetch(...args)
++      if (!lost && args[1]?.method === 'POST' && args[0].endsWith('/v1/changes')) { lost = true; await response.arrayBuffer(); throw new Error('lost response') }
++      return response
++    }
++    try { await assert.rejects(bridge.run(), /network_failed/) } finally { globalThis.fetch = realFetch }
++    await bridge.close()
++    session = Session.create(bot.id, session.snapshotEvents(), undefined, undefined, [syncEdit])
++    bridge = createSync(rt); await bridge.run()
++    const after = (await phoneRequest('/v1/changes?cursor=0')).changes
++    assert.equal(after.filter(r => r.payload?.parts?.[0]?.payload === 'persist despite lost ACK').length, 1)
++    assert.equal(wakeups, 0)
++    assert.equal(statSync(join(rt.home, 'kelivo-sync.sqlite')).mode & 0o777, 0o600)
++    assert.equal(text(session.deriveMessages()[1]), 'edited desktop answer')
++  })
+diff --git a/ds-bot/test/roster.test.js b/ds-bot/test/roster.test.js
+index 002de17..0b60c14 100644
+--- a/ds-bot/test/roster.test.js
++++ b/ds-bot/test/roster.test.js
+@@ -145,7 +145,7 @@ test('a group the user makes without a first message opens with its admin asking
+   for (const listener of ctx.listeners.get('session/event')) listener({ id: room.id }, { type: 'user/message', data: sent[0].message })
+   const controller = new AbortController()
+   const relay = ctx.registeredTools.get('group_relay').execute({}, { agent: { id: room.id }, callId: 'relay', signal: controller.signal })
+-  await settle()
++  await until(() => sent.length > 1)
+   controller.abort()
+   const result = JSON.parse(await relay)
+   const turns = sent.slice(1)
+-- 
+2.43.0
+

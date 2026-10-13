@@ -13,6 +13,7 @@ import 'package:Kelivo/core/database/schema_migrations.dart';
 import 'generated_schema/schema.dart';
 import 'generated_schema/schema_v1.dart' as v1;
 import 'generated_schema/schema_v2.dart' as v2;
+import 'generated_schema/schema_v3.dart' as v3;
 
 void main() {
   driftRuntimeOptions.dontWarnAboutMultipleDatabases = true;
@@ -191,6 +192,45 @@ void main() {
       );
     } finally {
       await database.close();
+    }
+  });
+
+  test('schema 3 upgrades to sync tables and live tracking', () async {
+    final file = databasePath();
+    final old = v3.DatabaseAtV3(NativeDatabase(file));
+    await old.customStatement('PRAGMA user_version=3');
+    await old.customStatement(
+      "INSERT INTO conversation_rows(id,title,created_at,updated_at) VALUES ('existing','Old chat',100,100)",
+    );
+    await old.close();
+    final outcome = await SchemaMigrations.upgradeFileInPlace(file);
+    expect(outcome.fromVersion, 3);
+    expect(outcome.toVersion, 4);
+    final repo = ChatDatabaseRepository.open(file: file);
+    try {
+      await repo.ensureReady();
+      expect((await repo.getConversation('existing'))!.title, 'Old chat');
+      await repo.deleteConversation('existing');
+      final raw = sqlite.sqlite3.open(
+        file.path,
+        mode: sqlite.OpenMode.readOnly,
+      );
+      try {
+        expect(
+          raw.select('SELECT * FROM sync_change_log_rows WHERE deleted=1'),
+          isNotEmpty,
+        );
+        expect(
+          raw.select(
+            "SELECT name FROM sqlite_master WHERE name='idx_sync_pending'",
+          ),
+          hasLength(1),
+        );
+      } finally {
+        raw.close();
+      }
+    } finally {
+      await repo.close();
     }
   });
 

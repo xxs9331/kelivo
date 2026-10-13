@@ -73,6 +73,10 @@ android {
                 signingConfig = signingConfigs.getByName("release")
             }
         }
+        getByName("debug") {
+            // The sync test build must not replace the user's official app.
+            applicationIdSuffix = ".sync"
+        }
     }
 }
 

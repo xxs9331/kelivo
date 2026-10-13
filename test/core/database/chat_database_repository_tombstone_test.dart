@@ -96,13 +96,15 @@ void main() {
     test('re-deleting a recreated conversation refreshes deletedAt', () async {
       await seedConversation('conv-a');
       await repository.deleteConversation('conv-a');
-      final first = (await repository.readTombstones()).single.deletedAt;
+      final first = (await repository.readTombstones(
+        scope: 'conversation',
+      )).single.deletedAt;
 
       await Future<void>.delayed(const Duration(milliseconds: 2));
       await seedConversation('conv-a');
       await repository.deleteConversation('conv-a');
 
-      final tombstones = await repository.readTombstones();
+      final tombstones = await repository.readTombstones(scope: 'conversation');
       expect(tombstones, hasLength(1));
       expect(tombstones.single.deletedAt.isAfter(first), isTrue);
     });
@@ -120,14 +122,14 @@ void main() {
       await seedConversation('conv-new');
       await repository.deleteConversation('conv-new');
 
-      final tombstones = await repository.readTombstones();
+      final tombstones = await repository.readTombstones(scope: 'conversation');
       expect(tombstones.map((t) => t.entityId), ['conv-new']);
     });
 
     test('clearAllData clears tombstones instead of writing them', () async {
       await seedConversation('conv-a');
       await repository.deleteConversation('conv-a');
-      expect(await repository.readTombstones(), hasLength(1));
+      expect(await repository.readTombstones(), hasLength(2));
 
       await repository.clearAllData();
 

@@ -9,6 +9,70 @@ class AppLocalizationsZh extends AppLocalizations {
   AppLocalizationsZh([String locale = 'zh']) : super(locale);
 
   @override
+  String get syncTitle => '多设备同步';
+
+  @override
+  String get syncServer => '服务器地址';
+
+  @override
+  String get syncPairCode => '配对码';
+
+  @override
+  String get syncPair => '配对此设备';
+
+  @override
+  String get syncNow => '立即同步';
+
+  @override
+  String get syncEnabled => '自动同步';
+
+  @override
+  String get syncDisconnect => '断开此设备';
+
+  @override
+  String get syncScan => '扫描配对二维码';
+
+  @override
+  String get syncShowQr => '配对另一台设备';
+
+  @override
+  String get syncLocalHttp => '允许私有局域网 HTTP 测试连接';
+
+  @override
+  String get syncScope =>
+      '同步对话、消息和删除。此版本的 API Key、其他配置和附件文件保留在原设备。私有局域网以外请使用 HTTPS。服务器存储尚未端到端加密。';
+
+  @override
+  String get syncWorking => '正在同步…';
+
+  @override
+  String get syncReady => '可以同步';
+
+  @override
+  String get syncNotPaired => '填写服务器地址和配对码以连接。';
+
+  @override
+  String get syncLast => '上次成功同步';
+
+  @override
+  String get syncPairExpired => '配对码错误、已过期或已使用，请生成新码。';
+
+  @override
+  String get syncRePair => '设备授权已失效或被撤销，请重新配对。';
+
+  @override
+  String get syncUnavailable => '无法同步，请检查服务器地址、网络和服务端日志后重试。';
+
+  @override
+  String get syncBusy => '正在等待生成、备份或恢复结束。';
+
+  @override
+  String get syncCursorAhead => '服务端已恢复到较早状态，请断开并重新配对，重建同步基线。';
+
+  @override
+  String get syncQrExpires => '配对码五分钟内有效，只能使用一次。';
+
+  @override
   String get settingsSearchHint => '搜索设置';
 
   @override
@@ -24827,6 +24891,70 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 /// The translations for Chinese, using the Han script (`zh_Hant`).
 class AppLocalizationsZhHant extends AppLocalizationsZh {
   AppLocalizationsZhHant() : super('zh_Hant');
+
+  @override
+  String get syncTitle => '多裝置同步';
+
+  @override
+  String get syncServer => '伺服器位址';
+
+  @override
+  String get syncPairCode => '配對碼';
+
+  @override
+  String get syncPair => '配對此裝置';
+
+  @override
+  String get syncNow => '立即同步';
+
+  @override
+  String get syncEnabled => '自動同步';
+
+  @override
+  String get syncDisconnect => '中斷此裝置';
+
+  @override
+  String get syncScan => '掃描配對 QR 碼';
+
+  @override
+  String get syncShowQr => '配對另一台裝置';
+
+  @override
+  String get syncLocalHttp => '允許私人區域網路 HTTP 測試連線';
+
+  @override
+  String get syncScope =>
+      '同步對話、訊息和刪除。此版本的 API Key、其他設定和附件檔案保留在原裝置。私人區域網路以外請使用 HTTPS。伺服器儲存尚未端對端加密。';
+
+  @override
+  String get syncWorking => '正在同步…';
+
+  @override
+  String get syncReady => '可以同步';
+
+  @override
+  String get syncNotPaired => '填寫伺服器位址和配對碼以連線。';
+
+  @override
+  String get syncLast => '上次成功同步';
+
+  @override
+  String get syncPairExpired => '配對碼錯誤、已過期或已使用，請產生新碼。';
+
+  @override
+  String get syncRePair => '裝置授權已失效或被撤銷，請重新配對。';
+
+  @override
+  String get syncUnavailable => '無法同步，請檢查伺服器位址、網路和伺服器日誌後重試。';
+
+  @override
+  String get syncBusy => '正在等待產生、備份或還原結束。';
+
+  @override
+  String get syncCursorAhead => '伺服器已還原到較早狀態，請中斷並重新配對，重建同步基線。';
+
+  @override
+  String get syncQrExpires => '配對碼五分鐘內有效，只能使用一次。';
 
   @override
   String get settingsSearchHint => '搜尋設定';

@@ -100,6 +100,132 @@ abstract class AppLocalizations {
     Locale.fromSubtags(languageCode: 'zh', scriptCode: 'Hant'),
   ];
 
+  /// No description provided for @syncTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Multi-device sync'**
+  String get syncTitle;
+
+  /// No description provided for @syncServer.
+  ///
+  /// In en, this message translates to:
+  /// **'Server URL'**
+  String get syncServer;
+
+  /// No description provided for @syncPairCode.
+  ///
+  /// In en, this message translates to:
+  /// **'Pairing code'**
+  String get syncPairCode;
+
+  /// No description provided for @syncPair.
+  ///
+  /// In en, this message translates to:
+  /// **'Pair this device'**
+  String get syncPair;
+
+  /// No description provided for @syncNow.
+  ///
+  /// In en, this message translates to:
+  /// **'Sync now'**
+  String get syncNow;
+
+  /// No description provided for @syncEnabled.
+  ///
+  /// In en, this message translates to:
+  /// **'Automatic sync'**
+  String get syncEnabled;
+
+  /// No description provided for @syncDisconnect.
+  ///
+  /// In en, this message translates to:
+  /// **'Disconnect this device'**
+  String get syncDisconnect;
+
+  /// No description provided for @syncScan.
+  ///
+  /// In en, this message translates to:
+  /// **'Scan pairing QR code'**
+  String get syncScan;
+
+  /// No description provided for @syncShowQr.
+  ///
+  /// In en, this message translates to:
+  /// **'Pair another device'**
+  String get syncShowQr;
+
+  /// No description provided for @syncLocalHttp.
+  ///
+  /// In en, this message translates to:
+  /// **'Allow HTTP on a private LAN for testing'**
+  String get syncLocalHttp;
+
+  /// No description provided for @syncScope.
+  ///
+  /// In en, this message translates to:
+  /// **'Sync conversations, messages and deletions. API keys, other settings and attachment files stay on the source device in this version. Use HTTPS outside your private LAN. Server storage is not end-to-end encrypted.'**
+  String get syncScope;
+
+  /// No description provided for @syncWorking.
+  ///
+  /// In en, this message translates to:
+  /// **'Syncing…'**
+  String get syncWorking;
+
+  /// No description provided for @syncReady.
+  ///
+  /// In en, this message translates to:
+  /// **'Ready to sync'**
+  String get syncReady;
+
+  /// No description provided for @syncNotPaired.
+  ///
+  /// In en, this message translates to:
+  /// **'Enter the server URL and a pairing code to connect.'**
+  String get syncNotPaired;
+
+  /// No description provided for @syncLast.
+  ///
+  /// In en, this message translates to:
+  /// **'Last successful sync'**
+  String get syncLast;
+
+  /// No description provided for @syncPairExpired.
+  ///
+  /// In en, this message translates to:
+  /// **'Pairing code is invalid, expired or already used. Generate a new code.'**
+  String get syncPairExpired;
+
+  /// No description provided for @syncRePair.
+  ///
+  /// In en, this message translates to:
+  /// **'Device authorization expired or was revoked. Pair this device again.'**
+  String get syncRePair;
+
+  /// No description provided for @syncUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Cannot sync. Check the server address, connection and server logs, then retry.'**
+  String get syncUnavailable;
+
+  /// No description provided for @syncBusy.
+  ///
+  /// In en, this message translates to:
+  /// **'Waiting for generation, backup or restore to finish.'**
+  String get syncBusy;
+
+  /// No description provided for @syncCursorAhead.
+  ///
+  /// In en, this message translates to:
+  /// **'The server was restored to an older state. Disconnect and pair again to rebuild the sync baseline.'**
+  String get syncCursorAhead;
+
+  /// No description provided for @syncQrExpires.
+  ///
+  /// In en, this message translates to:
+  /// **'This code expires in five minutes and can be used once.'**
+  String get syncQrExpires;
+
   /// No description provided for @settingsSearchHint.
   ///
   /// In en, this message translates to:
